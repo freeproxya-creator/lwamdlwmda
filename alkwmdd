@@ -176,10 +176,17 @@ end
 
 local WINDUI_CACHE = "ntmthub/windui_patched_v6.lua"
 
+local function corner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 6)
+    c.Parent = parent
+end
+
 local function createBuiltinWindUI()
+    local hui = (type(gethui) == "function" and gethui()) or nil
     local lp = game:GetService("Players").LocalPlayer
     if not lp then return nil end
-    local pg = lp:FindFirstChild("PlayerGui") or lp:WaitForChild("PlayerGui", 10)
+    local pg = (hui and hui:IsA("Instance") and hui) or lp:FindFirstChild("PlayerGui") or lp:WaitForChild("PlayerGui", 15)
     if not pg then return nil end
     local old = pg:FindFirstChild("NTMTHubUI")
     if old then old:Destroy() end
@@ -199,7 +206,7 @@ local function createBuiltinWindUI()
     openBtn.Font = Enum.Font.GothamBold
     openBtn.TextSize = 13
     openBtn.Parent = sg
-    Instance.new("UICorner", openBtn).CornerRadius = UDim.new(0, 8)
+    corner(openBtn, 8)
 
     local panel = Instance.new("Frame")
     panel.Size = UDim2.new(0.82, 0, 0.74, 0)
@@ -207,7 +214,7 @@ local function createBuiltinWindUI()
     panel.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
     panel.Visible = false
     panel.Parent = sg
-    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+    corner(panel, 10)
 
     local header = Instance.new("TextLabel")
     header.Size = UDim2.new(1, -8, 0, 30)
@@ -269,7 +276,7 @@ local function createBuiltinWindUI()
         btn.TextColor3 = Color3.new(1, 1, 1)
         btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
         btn.Parent = tabBar
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+        corner(btn, 5)
 
         tabFrames[title] = holder
         tabBtns[title] = btn
@@ -314,7 +321,7 @@ local function createBuiltinWindUI()
             b.Text = (on and "[ON] " or "[OFF] ") .. tostring(cfg.Title or "")
             b.BackgroundColor3 = on and Color3.fromRGB(90, 30, 75) or Color3.fromRGB(35, 35, 35)
             b.Parent = scroll
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            corner(b, 6)
             b.MouseButton1Click:Connect(function()
                 on = not on
                 b.Text = (on and "[ON] " or "[OFF] ") .. tostring(cfg.Title or "")
@@ -334,7 +341,7 @@ local function createBuiltinWindUI()
             b.TextColor3 = Color3.new(1, 1, 1)
             b.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
             b.Parent = scroll
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            corner(b, 6)
             b.MouseButton1Click:Connect(function() if cfg.Callback then cfg.Callback() end end)
         end
 
@@ -351,7 +358,7 @@ local function createBuiltinWindUI()
             box.TextColor3 = Color3.new(1, 1, 1)
             box.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
             box.Parent = scroll
-            Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+            corner(box, 6)
             box.FocusLost:Connect(function() if cfg.Callback then cfg.Callback(box.Text) end end)
         end
 
@@ -371,7 +378,7 @@ local function createBuiltinWindUI()
             b.TextColor3 = Color3.new(1, 1, 1)
             b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
             b.Parent = scroll
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            corner(b, 6)
             local function paint()
                 b.Text = tostring(cfg.Title or "Select") .. ": " .. tostring(values[idx] or "-")
             end
@@ -477,7 +484,6 @@ local function createBuiltinWindUI()
     end
     function lib:AddTheme() end
     function lib:SetTheme() end
-    print("[NTMT HUB] Built-in UI OK (WindUI skipped on this executor)")
     return lib
 end
 
@@ -527,68 +533,13 @@ end
 
 local WindUI
 local function loadWindUI()
-    local function finishWithLib(lib)
-        if type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then return false end
-        WindUI = lib
-        return true
-    end
-
-    if type(loadstring) ~= "function" and type(load) ~= "function" then
-        hubWarn("loadstring missing — using built-in UI")
-        return finishWithLib(createBuiltinWindUI())
-    end
-
-    local body, patchedOk
-
-    if isfile and isfile(WINDUI_CACHE) and readfile then
-        local cached = readfile(WINDUI_CACHE)
-        if type(cached) == "string" and #cached > 1000 then
-            body, patchedOk = patchWindUISource(cached)
-            if patchedOk then
-                print("[NTMT HUB] Using cached patched WindUI")
-            elseif delfile then
-                pcall(delfile, WINDUI_CACHE)
-            end
-        end
-    end
-
-    if not patchedOk then
-        body = universalHttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
-        if type(body) ~= "string" or #body < 1000 then
-            hubWarn("WindUI download failed — using built-in UI")
-            return finishWithLib(createBuiltinWindUI())
-        end
-        body, patchedOk = patchWindUISource(body)
-        if not patchedOk then
-            hubWarn("WindUI patch failed — using built-in UI")
-            return finishWithLib(createBuiltinWindUI())
-        end
-        if writefile then
-            pcall(function()
-                if makefolder then makefolder("ntmthub") end
-                writefile(WINDUI_CACHE, body)
-            end)
-        end
-    end
-
     cleanupBrokenGetIcons()
-
-    local chunk, compileErr = compileWindUIChunk(body)
-    if type(chunk) ~= "function" then
-        hubWarn("WindUI compile failed — using built-in UI:", tostring(compileErr))
-        return finishWithLib(createBuiltinWindUI())
+    WindUI = createBuiltinWindUI()
+    if not WindUI then
+        hubWarn("UI failed (PlayerGui not ready)")
+        return false
     end
-    local ok, lib = xpcall(chunk, function(err)
-        if debug and debug.traceback then return debug.traceback(tostring(err), 2) end
-        return tostring(err)
-    end)
-    if not ok or type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then
-        hubWarn("WindUI runtime failed — using built-in UI:", tostring(lib))
-        if delfile and isfile and isfile(WINDUI_CACHE) then pcall(delfile, WINDUI_CACHE) end
-        return finishWithLib(createBuiltinWindUI())
-    end
-    WindUI = lib
-    print("[NTMT HUB] WindUI loaded OK")
+    print("[NTMT HUB] UI loaded OK")
     return true
 end
 
@@ -1030,6 +981,9 @@ end
 
 local function setHasAny(set) return next(set) ~= nil end
 
+local function normalizeSeedKey(name) return type(name) == "string" and string.gsub(name, "%s+", "") or name end
+local function seedNamesMatch(a, b) return a == b or normalizeSeedKey(a) == normalizeSeedKey(b) end
+
 local function seedInSet(set, name)
     if not setHasAny(set) then return true end
     for k in set do if seedNamesMatch(k, name) then return true end end
@@ -1091,6 +1045,21 @@ local function slowFlyTo(targetPos)
     end
     movementBypass = false
     return false
+end
+
+local function normalizePetName(s) return string.lower(string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
+local function getPetDisplayName(species, size)
+    local ok, d = xpcall(PetData.GetDisplayName, noopErr, species, size)
+    if ok and type(d) == "string" then return d end
+    ok, d = xpcall(PetData.GetSpeciesDisplayName, noopErr, species)
+    if ok and type(d) == "string" then return d end
+    return species
+end
+local function matchesPet(species, size, target)
+    local t = normalizePetName(target)
+    local d = normalizePetName(getPetDisplayName(species, size))
+    local s = normalizePetName(getPetDisplayName(species, nil))
+    return d == t or s == t or string.find(d, t, 1, true) or string.find(s, t, 1, true)
 end
 
 local function matchesAnySelectedPet(species, size)
@@ -1171,6 +1140,16 @@ local function getPlayerFlatPos()
     return hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z) or nil
 end
 
+local function getStealPrompt(fruit)
+    local hp = fruit and fruit:FindFirstChild("HarvestPart")
+    if not hp then return nil end
+    local prompt = hp:FindFirstChild("StealPrompt")
+    if prompt and not prompt:IsA("ProximityPrompt") then
+        prompt = prompt:IsA("ObjectValue") and prompt.Value or hp:FindFirstChildWhichIsA("ProximityPrompt")
+    end
+    return prompt or hp:FindFirstChildWhichIsA("ProximityPrompt")
+end
+
 local function isStealComplete(fruit, fruitCountBefore)
     if not fruit or not fruit.Parent then return true end
     if not getStealPrompt(fruit) then return true end
@@ -1190,9 +1169,6 @@ local function getGearPrice(name)
     if not info then return math.huge end
     return (safeFlagGet(GearShopFlags and GearShopFlags.PriceOverrides))[name] or info.Cost or math.huge
 end
-
-local function normalizeSeedKey(name) return type(name) == "string" and string.gsub(name, "%s+", "") or name end
-local function seedNamesMatch(a, b) return a == b or normalizeSeedKey(a) == normalizeSeedKey(b) end
 
 local function findGearTool(attrName, priority)
     local found = {}
@@ -1300,6 +1276,17 @@ local function isSpotEmpty(pos, occupied)
     return true
 end
 
+local function findPlantAreaPosition(nearPos)
+    if #plantAreas == 0 then refreshPlantAreas() end
+    if #plantAreas == 0 or not nearPos then return nil end
+    local bestPos, bestDist
+    for _, pos in plantAreas do
+        local d = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(nearPos.X, 0, nearPos.Z)).Magnitude
+        if not bestDist or d < bestDist then bestPos, bestDist = pos, d end
+    end
+    return bestPos
+end
+
 local function findEmptyGardenSpotNearPlayer()
     refreshOwnerPlot()
     if #plantAreas == 0 then refreshPlantAreas() end
@@ -1338,18 +1325,6 @@ local function extractPlantDataPosition(plantData)
     end
     return nil
 end
-
-local function findPlantAreaPosition(nearPos)
-    if #plantAreas == 0 then refreshPlantAreas() end
-    if #plantAreas == 0 or not nearPos then return nil end
-    local bestPos, bestDist
-    for _, pos in plantAreas do
-        local d = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(nearPos.X, 0, nearPos.Z)).Magnitude
-        if not bestDist or d < bestDist then bestPos, bestDist = pos, d end
-    end
-    return bestPos
-end
-
 
 local function isSprinklerSpotTaken(pos, plantKey)
     if plantKey and sprinkledPlantKeys[plantKey] then return true end
@@ -1416,21 +1391,6 @@ local function initMapFolders()
     end
 end
 initMapFolders()
-
-local function normalizePetName(s) return string.lower(string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
-local function getPetDisplayName(species, size)
-    local ok, d = xpcall(PetData.GetDisplayName, noopErr, species, size)
-    if ok and type(d) == "string" then return d end
-    ok, d = xpcall(PetData.GetSpeciesDisplayName, noopErr, species)
-    if ok and type(d) == "string" then return d end
-    return species
-end
-local function matchesPet(species, size, target)
-    local t = normalizePetName(target)
-    local d = normalizePetName(getPetDisplayName(species, size))
-    local s = normalizePetName(getPetDisplayName(species, nil))
-    return d == t or s == t or string.find(d, t, 1, true) or string.find(s, t, 1, true)
-end
 
 local function trackSeedBuy(name)
     local p = getSeedPrice(name)
@@ -1655,16 +1615,6 @@ local function getPlotCenterPos(plot)
     local psr = plot:FindFirstChild("PlotSizeReference")
     if psr and psr:IsA("BasePart") then return psr.Position end
     return plot:GetPivot().Position
-end
-
-local function getStealPrompt(fruit)
-    local hp = fruit and fruit:FindFirstChild("HarvestPart")
-    if not hp then return nil end
-    local prompt = hp:FindFirstChild("StealPrompt")
-    if prompt and not prompt:IsA("ProximityPrompt") then
-        prompt = prompt:IsA("ObjectValue") and prompt.Value or hp:FindFirstChildWhichIsA("ProximityPrompt")
-    end
-    return prompt or hp:FindFirstChildWhichIsA("ProximityPrompt")
 end
 
 local function getStealableFruitsOnPlot(plot, limit)
@@ -2430,6 +2380,7 @@ task.defer(function()
         return tostring(e)
     end)
     if not ok then
+        genv.__NTMT_HUB_RUNNING = nil
         warn("========================================")
         warn("[NTMT HUB] SCRIPT CRASHED:")
         warn(tostring(err))
