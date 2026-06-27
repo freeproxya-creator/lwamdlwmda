@@ -13,8 +13,8 @@ pcall(function()
     end
 end)
 
-local DISCORD_LINK = "https://discord.gg/your-invite"
-local MADE_BY = "nguoitinhmuathu"
+_G.DISCORD_LINK = "https://discord.gg/your-invite"
+_G.MADE_BY = "nguoitinhmuathu"
 
 local genv = _G
 if type(getgenv) == "function" then
@@ -39,7 +39,7 @@ local function noopErr(err)
     return tostring(err or "")
 end
 
-local Executor = "Unknown"
+_G.Executor = "Unknown"
 do
     if type(identifyexecutor) == "function" then
         local ok, name = pcall(identifyexecutor)
@@ -51,7 +51,7 @@ do
     end
 end
 
-local cloneref = cloneref or clonereference or function(o) return o end
+_G.cloneref = cloneref or clonereference or function(o) return o end
 
 if type(table.clear) ~= "function" then
     table.clear = function(t)
@@ -92,11 +92,11 @@ if type(gethui) ~= "function" then
     end)
 end
 
-local function hubWarn(...)
+function _G.hubWarn(...)
     warn("[NTMT HUB]", ...)
 end
 
-local function cleanupBrokenGetIcons()
+function _G.cleanupBrokenGetIcons()
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
         local gi = rs:FindFirstChild("GetIcons")
@@ -107,7 +107,7 @@ local function cleanupBrokenGetIcons()
     end)
 end
 
-local function patchWindUISource(body)
+function _G.patchWindUISource(body)
     if type(body) ~= "string" then return body, false end
     local replacement = "local d=b({Icons={}})"
     local exact = 'local d=b(game:GetService"ReplicatedStorage":WaitForChild("GetIcons",99999):InvokeServer())'
@@ -136,7 +136,7 @@ local function patchWindUISource(body)
     return body, not stillBad
 end
 
-local function buildWindUIEnv()
+function _G.buildWindUIEnv()
     local env = {}
     for k, v in pairs(_G) do env[k] = v end
     for k, v in pairs(genv) do env[k] = v end
@@ -156,7 +156,7 @@ local function buildWindUIEnv()
     })
 end
 
-local function compileWindUIChunk(body)
+function _G.compileWindUIChunk(body)
     local env = buildWindUIEnv()
     if type(load) == "function" then
         local chunk, err = load(body, "WindUI", "t", env)
@@ -174,15 +174,15 @@ local function compileWindUIChunk(body)
     return nil, "no loadstring/load"
 end
 
-local WINDUI_CACHE = "ntmthub/windui_patched_v6.lua"
+_G.WINDUI_CACHE = "ntmthub/windui_patched_v6.lua"
 
-local function corner(parent, radius)
+function _G.corner(parent, radius)
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, radius or 6)
     c.Parent = parent
 end
 
-local function createBuiltinWindUI()
+function _G.createBuiltinWindUI()
     local hui = (type(gethui) == "function" and gethui()) or nil
     local lp = game:GetService("Players").LocalPlayer
     if not lp then return nil end
@@ -487,7 +487,7 @@ local function createBuiltinWindUI()
     return lib
 end
 
-local function safeNetCall(remote, ...)
+function _G.safeNetCall(remote, ...)
     if not remote then return false end
     local args = { ... }
     if type(remote.Fire) == "function" then
@@ -499,7 +499,7 @@ local function safeNetCall(remote, ...)
     return false
 end
 
-local function safeFlagGet(flagObj)
+function _G.safeFlagGet(flagObj)
     if not flagObj then return {} end
     if type(flagObj.Get) == "function" then
         local ok, val = xpcall(function() return flagObj:Get() end, noopErr)
@@ -508,7 +508,7 @@ local function safeFlagGet(flagObj)
     return {}
 end
 
-local function universalHttpGet(url)
+function _G.universalHttpGet(url)
     if game and type(game.HttpGet) == "function" then
         local ok, body = xpcall(function() return game:HttpGet(url) end, noopErr)
         if ok and type(body) == "string" and #body > 0 then return body end
@@ -523,7 +523,7 @@ local function universalHttpGet(url)
     return nil
 end
 
-local function httpPost(url, body)
+function _G.httpPost(url, body)
     local req = (syn and syn.request) or (http and http.request) or http_request or request
     if type(req) ~= "function" then return false end
     return xpcall(function()
@@ -531,8 +531,8 @@ local function httpPost(url, body)
     end, noopErr)
 end
 
-local WindUI
-local function loadWindUI()
+_G.WindUI = _G.WindUI
+function _G.loadWindUI()
     cleanupBrokenGetIcons()
     WindUI = createBuiltinWindUI()
     if not WindUI then
@@ -543,9 +543,36 @@ local function loadWindUI()
     return true
 end
 
+
+do
+    local _boot = {
+        "DISCORD_LINK",
+        "Executor",
+        "MADE_BY",
+        "WINDUI_CACHE",
+        "WindUI",
+        "buildWindUIEnv",
+        "cleanupBrokenGetIcons",
+        "cloneref",
+        "compileWindUIChunk",
+        "corner",
+        "createBuiltinWindUI",
+        "httpPost",
+        "hubWarn",
+        "loadWindUI",
+        "patchWindUISource",
+        "safeFlagGet",
+        "safeNetCall",
+        "universalHttpGet",
+    }
+    for _, k in ipairs(_boot) do
+        if _G[k] ~= nil then genv[k] = _G[k] end
+    end
+end
+
 local function runMain()
 
-local Services = {
+_G.Services = {
     Players = cloneref(game:GetService("Players")),
     ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage")),
     Workspace = cloneref(game:GetService("Workspace")),
@@ -556,7 +583,7 @@ local Services = {
     RunService = cloneref(game:GetService("RunService")),
 }
 
-local LocalPlayer = Services.Players.LocalPlayer or Services.Players.PlayerAdded:Wait()
+_G.LocalPlayer = Services.Players.LocalPlayer or Services.Players.PlayerAdded:Wait()
 repeat task.wait() until game:IsLoaded()
 
 if not loadWindUI() then
@@ -564,13 +591,13 @@ if not loadWindUI() then
     return
 end
 
-local Gardens = Services.Workspace:WaitForChild("Gardens", 120)
+_G.Gardens = Services.Workspace:WaitForChild("Gardens", 120)
 if not Gardens then warn("[NTMT HUB] Gardens not found") return end
 
-local sessionStart = os.time()
-local totalPlaySeconds = 0
+_G.sessionStart = os.time()
+_G.totalPlaySeconds = 0
 
-local function waitTag(tag, timeout)
+function _G.waitTag(tag, timeout)
     timeout = timeout or 120
     local deadline = os.clock() + timeout
     while not Services.CollectionService:HasTag(LocalPlayer, tag) and os.clock() < deadline do
@@ -580,25 +607,25 @@ local function waitTag(tag, timeout)
 end
 waitTag("DataLoaded", 120)
 
-local Shared = Services.ReplicatedStorage:WaitForChild("SharedModules", 60)
-local function safeRequire(mod)
+_G.Shared = Services.ReplicatedStorage:WaitForChild("SharedModules", 60)
+function _G.safeRequire(mod)
     if not mod then return nil end
     local ok, res = xpcall(require, noopErr, mod)
     return ok and res or nil
 end
-local Net = safeRequire(Shared:WaitForChild("Networking"))
+_G.Net = safeRequire(Shared:WaitForChild("Networking"))
 if not Net then hubWarn("Networking module failed") return end
-local SeedData = safeRequire(Shared:WaitForChild("SeedData"))
-local SeedShopFlags = safeRequire(Shared.Flags:WaitForChild("SeedShopFlags"))
-local GearShopData = safeRequire(Shared:WaitForChild("GearShopData"))
-local GearShopFlags = safeRequire(Shared.Flags:WaitForChild("GearShopFlags"))
-local GardenFlags = safeRequire(Shared.Flags:WaitForChild("GardenFlags"))
-local FruitValueCalc = safeRequire(Shared:WaitForChild("FruitValueCalc"))
-local ExpansionPrices = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("ExpansionPrices"))
-local PetData = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("PetData"))
-local PetSizes = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("PetSizes"))
-local PlayerState = safeRequire(Services.ReplicatedStorage.ClientModules:WaitForChild("PlayerStateClient"))
-local PlayerReplica = nil
+_G.SeedData = safeRequire(Shared:WaitForChild("SeedData"))
+_G.SeedShopFlags = safeRequire(Shared.Flags:WaitForChild("SeedShopFlags"))
+_G.GearShopData = safeRequire(Shared:WaitForChild("GearShopData"))
+_G.GearShopFlags = safeRequire(Shared.Flags:WaitForChild("GearShopFlags"))
+_G.GardenFlags = safeRequire(Shared.Flags:WaitForChild("GardenFlags"))
+_G.FruitValueCalc = safeRequire(Shared:WaitForChild("FruitValueCalc"))
+_G.ExpansionPrices = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("ExpansionPrices"))
+_G.PetData = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("PetData"))
+_G.PetSizes = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("PetSizes"))
+_G.PlayerState = safeRequire(Services.ReplicatedStorage.ClientModules:WaitForChild("PlayerStateClient"))
+_G.PlayerReplica = nil
 if PlayerState and type(PlayerState.WaitForLocalReplica) == "function" then
     local ok, rep = xpcall(function() return PlayerState:WaitForLocalReplica(120) end, noopErr)
     if ok then PlayerReplica = rep end
@@ -606,17 +633,17 @@ end
 if type(SeedData) ~= "table" then hubWarn("SeedData missing") return end
 if type(GearShopData) ~= "table" or type(GearShopData.Data) ~= "table" then hubWarn("GearShopData missing") return end
 
-local StockItems = Services.ReplicatedStorage:WaitForChild("StockValues"):WaitForChild("SeedShop"):WaitForChild("Items")
-local GearStockItems = Services.ReplicatedStorage:WaitForChild("StockValues"):WaitForChild("GearShop"):WaitForChild("Items")
+_G.StockItems = Services.ReplicatedStorage:WaitForChild("StockValues"):WaitForChild("SeedShop"):WaitForChild("Items")
+_G.GearStockItems = Services.ReplicatedStorage:WaitForChild("StockValues"):WaitForChild("GearShop"):WaitForChild("Items")
 
-local SeedDataByName, SeedNames, GearNames, GearDataByName = {}, {}, {}, {}
+_G.SeedDataByName, _G.SeedNames, _G.GearNames, _G.GearDataByName = {}, {}, {}, {}
 for _, info in ipairs(SeedData) do
     SeedDataByName[info.SeedName] = info
     SeedNames[#SeedNames + 1] = info.SeedName
 end
 table.sort(SeedNames)
 
-local function isExcludedPlantBuySeed(name)
+function _G.isExcludedPlantBuySeed(name)
     if type(name) ~= "string" then return false end
     local lower = string.lower(name)
     local blocked = { "briar rose", "ghost pepper", "gold hypno bloom", "rainbow" }
@@ -626,7 +653,7 @@ local function isExcludedPlantBuySeed(name)
     return false
 end
 
-local PlantSeedNames = {}
+_G.PlantSeedNames = {}
 for _, name in ipairs(SeedNames) do
     if not isExcludedPlantBuySeed(name) then PlantSeedNames[#PlantSeedNames + 1] = name end
 end
@@ -637,13 +664,13 @@ for _, info in ipairs(GearShopData.Data) do
 end
 table.sort(GearNames)
 
-local PET_LIST = {
+_G.PET_LIST = {
     "Monkey", "Bee", "BlackDragon", "GoldenDragonfly", "Unicorn", "Raccoon", "IceSerpent",
     "Robin", "Deer", "Bunny", "Chicken", "Turtle", "Frog", "GoldenDragon", "Griffin", "Panda",
 }
-local SPRINKLER_LIST = { "Super Sprinkler", "Legendary Sprinkler", "Rare Sprinkler", "Uncommon Sprinkler", "Common Sprinkler" }
-local UI_THEME_NAMES = { "Black", "Pink", "Red", "Green", "Blue", "White", "Gray", "Brown", "Yellow", "Purple" }
-local UI_THEMES = {
+_G.SPRINKLER_LIST = { "Super Sprinkler", "Legendary Sprinkler", "Rare Sprinkler", "Uncommon Sprinkler", "Common Sprinkler" }
+_G.UI_THEME_NAMES = { "Black", "Pink", "Red", "Green", "Blue", "White", "Gray", "Brown", "Yellow", "Purple" }
+_G.UI_THEMES = {
     Black = { accent = "#ff4fd8", bg = "#0d0d0d", btn = "#1a1a1a", text = "#ffffff", toggle = "#ff4fd8" },
     Pink = { accent = "#ff69b4", bg = "#1a0a12", btn = "#2d1520", text = "#ffe6f0", toggle = "#ff69b4" },
     Red = { accent = "#ef4444", bg = "#140808", btn = "#2a1010", text = "#ffe6e6", toggle = "#ef4444" },
@@ -655,31 +682,31 @@ local UI_THEMES = {
     Yellow = { accent = "#eab308", bg = "#1a160a", btn = "#3d3415", text = "#fffbe6", toggle = "#eab308" },
     Purple = { accent = "#a855f7", bg = "#140a1a", btn = "#2a153d", text = "#f3e6ff", toggle = "#a855f7" },
 }
-local COOLDOWN = { Harvest = 0.01, Plant = 0.35, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.35, Mail = 2 }
-local PLANT_MIN_DIST = 3
-local MUTATION_COLLECT_WAIT = 0.1
-local SLOW_FLY_RATIO = 0.22
-local PET_FIND_SCAN_SEC = 5
-local FLY_STEP = 18
-local SEGMENT_PAUSE = 1
-local NEAR_PLAYER_DIST = 20
-local PLOT_EDGE_MARGIN = 8
-local SPRINKLER_MIN_DIST = 8
-local STEAL_BATCH = 3
-local STEAL_HOLD_TIMEOUT = 12
-local WATERING_CAN_LIST = { "Super Watering Can", "Legendary Watering Can", "Rare Watering Can", "Uncommon Watering Can", "Common Watering Can" }
-local SHOVEL_BATCH = 10
-local MAIL_MAX_PER_GIFT = 20
-local MAIL_SEND_GAP = 1.5
-local MAIL_GEAR_CATEGORIES = { "Sprinklers", "WateringCans", "Mushrooms", "Gnomes", "Raccoons", "Crates", "SeedPacks", "Trowels", "Props", "Flashbangs", "EmptyPots", "Shovels" }
-local RARITY_RANK = { Secret = 1, Super = 2, Mythic = 3, Legendary = 4, Epic = 5, Rare = 6, Uncommon = 7, Common = 8 }
-local CONFIG_FILE = "ntmthub_gag2_config.json"
+_G.COOLDOWN = { Harvest = 0.01, Plant = 0.35, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.35, Mail = 2 }
+_G.PLANT_MIN_DIST = 3
+_G.MUTATION_COLLECT_WAIT = 0.1
+_G.SLOW_FLY_RATIO = 0.22
+_G.PET_FIND_SCAN_SEC = 5
+_G.FLY_STEP = 18
+_G.SEGMENT_PAUSE = 1
+_G.NEAR_PLAYER_DIST = 20
+_G.PLOT_EDGE_MARGIN = 8
+_G.SPRINKLER_MIN_DIST = 8
+_G.STEAL_BATCH = 3
+_G.STEAL_HOLD_TIMEOUT = 12
+_G.WATERING_CAN_LIST = { "Super Watering Can", "Legendary Watering Can", "Rare Watering Can", "Uncommon Watering Can", "Common Watering Can" }
+_G.SHOVEL_BATCH = 10
+_G.MAIL_MAX_PER_GIFT = 20
+_G.MAIL_SEND_GAP = 1.5
+_G.MAIL_GEAR_CATEGORIES = { "Sprinklers", "WateringCans", "Mushrooms", "Gnomes", "Raccoons", "Crates", "SeedPacks", "Trowels", "Props", "Flashbangs", "EmptyPots", "Shovels" }
+_G.RARITY_RANK = { Secret = 1, Super = 2, Mythic = 3, Legendary = 4, Epic = 5, Rare = 6, Uncommon = 7, Common = 8 }
+_G.CONFIG_FILE = "ntmthub_gag2_config.json"
 
-local movementBypass = false
-local gardenActionLock = false
-local plantingBusy, sprinklerBusy, shovelBusy, stealBusy, dropsBusy = false, false, false, false, false
-local sprinkledSpots = {}
-local sprinkledPlantKeys = {}
+_G.movementBypass = false
+_G.gardenActionLock = false
+_G.plantingBusy, _G.sprinklerBusy, _G.shovelBusy, _G.stealBusy, _G.dropsBusy = false, false, false, false, false
+_G.sprinkledSpots = {}
+_G.sprinkledPlantKeys = {}
 
 genv.ftgs_AutoHarvest = false
 genv.ftgs_AutoSell = false
@@ -703,31 +730,31 @@ genv.ftgs_AutoEquipBestPet = false
 genv.ftgs_AutoWebhook = false
 genv.ftgs_AutoSendMail = false
 
-local selectedBuySeeds, selectedBuyGears = {}, {}
-local selectedPlantSeeds, selectedShovelSeeds, selectedSprinklers, selectedPets = { Carrot = true }, { Carrot = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
-local mailUsername, mailSeedName, mailGearName = "", "Carrot", GearNames[1] or ""
-local mailSeedAmount, mailGearAmount, mailMessage = 1, 0, "NTMT HUB"
-local selectedFindPet = "Unicorn"
-local selectedUITheme = "Black"
-local desiredWalkSpeed, desiredJumpPower = 16, 50
-local webhookUrl, webhookIntervalMin, inputJobId = "", 5, ""
+_G.selectedBuySeeds, _G.selectedBuyGears = {}, {}
+_G.selectedPlantSeeds, _G.selectedShovelSeeds, _G.selectedSprinklers, _G.selectedPets = { Carrot = true }, { Carrot = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
+_G.mailUsername, _G.mailSeedName, _G.mailGearName = "", "Carrot", GearNames[1] or ""
+_G.mailSeedAmount, _G.mailGearAmount, _G.mailMessage = 1, 0, "NTMT HUB"
+_G.selectedFindPet = "Unicorn"
+_G.selectedUITheme = "Black"
+_G.desiredWalkSpeed, _G.desiredJumpPower = 16, 50
+_G.webhookUrl, _G.webhookIntervalMin, _G.inputJobId = "", 5, ""
 
-local BoughtSeeds, BoughtGears, BoughtPets = {}, {}, {}
-local StolenFruits = {}
+_G.BoughtSeeds, _G.BoughtGears, _G.BoughtPets = {}, {}, {}
+_G.StolenFruits = {}
 
-local OwnerPlot, PlayerPlot = nil, nil
-local savedPlotCenter, savedPlotSize = nil, Vector3.new(44, 1, 44)
-local plantAreas, savedPlantPositions = {}, {}
-local trackedPlants, myUserId = {}, LocalPlayer.UserId
-local WildPetFolder, WildPetSpawns, SeedPackSpawns = nil, nil, nil
-local isCatchingPet, petCatchCooldown = false, {}
-local collectingMutation, petFindBusy = false, false
-local lastPlant, lastExpand, lastShovel, lastGear, lastPet, lastSellTry, lastMailTime = 0, 0, 0, 0, 0, 0, 0
-local isSendingMail = false
-local firedSet = {}
-local HARVEST_BATCH = 1
+_G.OwnerPlot, _G.PlayerPlot = nil, nil
+_G.savedPlotCenter, _G.savedPlotSize = nil, Vector3.new(44, 1, 44)
+_G.plantAreas, _G.savedPlantPositions = {}, {}
+_G.trackedPlants, _G.myUserId = {}, LocalPlayer.UserId
+_G.WildPetFolder, _G.WildPetSpawns, _G.SeedPackSpawns = nil, nil, nil
+_G.isCatchingPet, _G.petCatchCooldown = false, {}
+_G.collectingMutation, _G.petFindBusy = false, false
+_G.lastPlant, _G.lastExpand, _G.lastShovel, _G.lastGear, _G.lastPet, _G.lastSellTry, _G.lastMailTime = 0, 0, 0, 0, 0, 0, 0
+_G.isSendingMail = false
+_G.firedSet = {}
+_G.HARVEST_BATCH = 1
 
-local function saveConfig()
+function _G.saveConfig()
     if not writefile then return end
     xpcall(function()
         writefile(CONFIG_FILE, Services.HttpService:JSONEncode({
@@ -750,7 +777,7 @@ local function saveConfig()
     end, noopErr)
 end
 
-local function loadConfig()
+function _G.loadConfig()
     if type(genv.ftgs_webhookUrl) == "string" and genv.ftgs_webhookUrl ~= "" then webhookUrl = genv.ftgs_webhookUrl end
     if type(genv.ftgs_webhookIntervalMin) == "number" then webhookIntervalMin = genv.ftgs_webhookIntervalMin end
     if type(genv.ftgs_uiTheme) == "string" then selectedUITheme = genv.ftgs_uiTheme end
@@ -777,24 +804,24 @@ end
 loadConfig()
 
 
-local function getRoot()
+function _G.getRoot()
     local c = LocalPlayer.Character
     return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-local function getHumanoid()
+function _G.getHumanoid()
     local c = LocalPlayer.Character
     return c and c:FindFirstChildOfClass("Humanoid")
 end
 
-local function formatDuration(totalSec)
+function _G.formatDuration(totalSec)
     totalSec = math.max(0, math.floor(totalSec))
     return string.format("%dh %02dm %02ds", math.floor(totalSec / 3600), math.floor((totalSec % 3600) / 60), totalSec % 60)
 end
 
-local function timeAgo(ts) return formatDuration(os.time() - ts) .. " ago" end
+function _G.timeAgo(ts) return formatDuration(os.time() - ts) .. " ago" end
 
-local function getSheckles()
+function _G.getSheckles()
     local ls = LocalPlayer:FindFirstChild("leaderstats")
     local s = ls and ls:FindFirstChild("Sheckles")
     if s then return s.Value end
@@ -802,11 +829,11 @@ local function getSheckles()
     return 0
 end
 
-local function getFruitCount() return LocalPlayer:GetAttribute("FruitCount") or 0 end
-local function getMaxFruitCapacity() return LocalPlayer:GetAttribute("MaxFruitCapacity") or 100 end
-local function isInventoryFull() return getFruitCount() >= getMaxFruitCapacity() end
+function _G.getFruitCount() return LocalPlayer:GetAttribute("FruitCount") or 0 end
+function _G.getMaxFruitCapacity() return LocalPlayer:GetAttribute("MaxFruitCapacity") or 100 end
+function _G.isInventoryFull() return getFruitCount() >= getMaxFruitCapacity() end
 
-local function cachePlantPositions(plot)
+function _G.cachePlantPositions(plot)
     table.clear(savedPlantPositions)
     if not plot then return end
     local visual = plot:FindFirstChild("Visual")
@@ -820,7 +847,7 @@ local function cachePlantPositions(plot)
     end
 end
 
-local function refreshPlantAreas()
+function _G.refreshPlantAreas()
     table.clear(plantAreas)
     for _, pos in savedPlantPositions do plantAreas[#plantAreas + 1] = pos end
     if #plantAreas == 0 and savedPlotCenter then
@@ -833,7 +860,7 @@ local function refreshPlantAreas()
     end
 end
 
-local function refreshOwnerPlot()
+function _G.refreshOwnerPlot()
     if OwnerPlot and OwnerPlot.Parent then return OwnerPlot end
     if not Gardens then return nil end
     for _, plot in Gardens:GetChildren() do
@@ -856,12 +883,12 @@ end
 
 task.defer(function() refreshOwnerPlot() safeNetCall(Net.Garden and Net.Garden.RequestGardens) end)
 
-local function getPlantSeedName(data)
+function _G.getPlantSeedName(data)
     if type(data) ~= "table" then return nil end
     return data.PlantName or data.plantName or data.seedName or data.SeedName or data.Seed or data.seed or data.Name
 end
 
-local function hookGardenRemotes()
+function _G.hookGardenRemotes()
     local function hook(name, fn)
         local r = Net.Garden and Net.Garden[name]
         if r and r.OnClientEvent then xpcall(function() r.OnClientEvent:Connect(fn) end, noopErr) end
@@ -892,7 +919,7 @@ local function hookGardenRemotes()
 end
 hookGardenRemotes()
 
-local function tpInstant(pos)
+function _G.tpInstant(pos)
     local hrp = getRoot()
     if not hrp or not pos then return false end
     hrp.AssemblyLinearVelocity = Vector3.zero
@@ -901,11 +928,11 @@ local function tpInstant(pos)
     return true
 end
 
-local function getGearStandPos(placePos)
+function _G.getGearStandPos(placePos)
     return placePos + Vector3.new(0, 3, 0)
 end
 
-local function flySteps(from, to)
+function _G.flySteps(from, to)
     local dist = (to - from).Magnitude
     if dist <= 6 then tpInstant(to - Vector3.new(0, 3, 0)) return end
     local steps = math.max(2, math.ceil(dist / FLY_STEP))
@@ -922,7 +949,7 @@ local function flySteps(from, to)
     end
 end
 
-local function segmentedFlyTo(targetPos)
+function _G.segmentedFlyTo(targetPos)
     local hrp = getRoot()
     if not hrp or not targetPos then return false end
     local goal = targetPos + Vector3.new(0, 3, 0)
@@ -937,17 +964,17 @@ local function segmentedFlyTo(targetPos)
     return true
 end
 
-local function getPlotCenterCFrame()
+function _G.getPlotCenterCFrame()
     refreshOwnerPlot()
     return savedPlotCenter and CFrame.new(savedPlotCenter + Vector3.new(0, 3, 0)) or nil
 end
 
-local function returnToGarden()
+function _G.returnToGarden()
     refreshOwnerPlot()
     tpInstant(savedPlotCenter)
 end
 
-local function holdGardenStill(duration)
+function _G.holdGardenStill(duration)
     refreshOwnerPlot()
     if not savedPlotCenter then return end
     local cf = CFrame.new(savedPlotCenter + Vector3.new(0, 3, 0))
@@ -970,7 +997,7 @@ local function holdGardenStill(duration)
     gardenActionLock = false
 end
 
-local function parseMultiSelect(sel, into)
+function _G.parseMultiSelect(sel, into)
     table.clear(into)
     if type(sel) ~= "table" then return end
     for k, v in pairs(sel) do
@@ -979,18 +1006,18 @@ local function parseMultiSelect(sel, into)
     end
 end
 
-local function setHasAny(set) return next(set) ~= nil end
+function _G.setHasAny(set) return next(set) ~= nil end
 
-local function normalizeSeedKey(name) return type(name) == "string" and string.gsub(name, "%s+", "") or name end
-local function seedNamesMatch(a, b) return a == b or normalizeSeedKey(a) == normalizeSeedKey(b) end
+function _G.normalizeSeedKey(name) return type(name) == "string" and string.gsub(name, "%s+", "") or name end
+function _G.seedNamesMatch(a, b) return a == b or normalizeSeedKey(a) == normalizeSeedKey(b) end
 
-local function seedInSet(set, name)
+function _G.seedInSet(set, name)
     if not setHasAny(set) then return true end
     for k in set do if seedNamesMatch(k, name) then return true end end
     return false
 end
 
-local function buildPriorityList(selected, fallbackList)
+function _G.buildPriorityList(selected, fallbackList)
     local out, seen = {}, {}
     for name in selected do
         if not seen[name] then out[#out + 1], seen[name] = name, true end
@@ -1000,7 +1027,7 @@ local function buildPriorityList(selected, fallbackList)
     return fallbackList
 end
 
-local function isWithinPlot(extra)
+function _G.isWithinPlot(extra)
     refreshOwnerPlot()
     if not savedPlotCenter then return false end
     local hrp = getRoot()
@@ -1012,15 +1039,15 @@ local function isWithinPlot(extra)
         and math.abs(hrp.Position.Z - savedPlotCenter.Z) <= hz
 end
 
-local function isStandingOnPlot()
+function _G.isStandingOnPlot()
     return isWithinPlot(2)
 end
 
-local function isNearPlotForActions()
+function _G.isNearPlotForActions()
     return isWithinPlot(PLOT_EDGE_MARGIN)
 end
 
-local function slowFlyTo(targetPos)
+function _G.slowFlyTo(targetPos)
     if not targetPos then return false end
     movementBypass = true
     local deadline = os.clock() + 90
@@ -1047,22 +1074,22 @@ local function slowFlyTo(targetPos)
     return false
 end
 
-local function normalizePetName(s) return string.lower(string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
-local function getPetDisplayName(species, size)
+function _G.normalizePetName(s) return string.lower(string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
+function _G.getPetDisplayName(species, size)
     local ok, d = xpcall(PetData.GetDisplayName, noopErr, species, size)
     if ok and type(d) == "string" then return d end
     ok, d = xpcall(PetData.GetSpeciesDisplayName, noopErr, species)
     if ok and type(d) == "string" then return d end
     return species
 end
-local function matchesPet(species, size, target)
+function _G.matchesPet(species, size, target)
     local t = normalizePetName(target)
     local d = normalizePetName(getPetDisplayName(species, size))
     local s = normalizePetName(getPetDisplayName(species, nil))
     return d == t or s == t or string.find(d, t, 1, true) or string.find(s, t, 1, true)
 end
 
-local function matchesAnySelectedPet(species, size)
+function _G.matchesAnySelectedPet(species, size)
     if not setHasAny(selectedPets) then return false end
     for petName in selectedPets do
         if matchesPet(species, size, petName) then return true end
@@ -1070,7 +1097,7 @@ local function matchesAnySelectedPet(species, size)
     return false
 end
 
-local function findGearMailCategory(gearName)
+function _G.findGearMailCategory(gearName)
     local inv = PlayerReplica and PlayerReplica.Data and PlayerReplica.Data.Inventory
     if type(inv) == "table" then
         for _, cat in MAIL_GEAR_CATEGORIES do
@@ -1087,7 +1114,7 @@ local function findGearMailCategory(gearName)
     return "Sprinklers"
 end
 
-local function lookupMailUserId(username)
+function _G.lookupMailUserId(username)
     if type(username) ~= "string" or username == "" then return nil end
     username = string.gsub(username, "^%s*@?(.-)%s*$", "%1")
     if username == "" then return nil end
@@ -1098,7 +1125,7 @@ local function lookupMailUserId(username)
     return nil
 end
 
-local function sendMailBatch(userId, batch, note)
+function _G.sendMailBatch(userId, batch, note)
     if type(userId) ~= "number" or #batch == 0 then return false end
     local mailbox = Net.Mailbox
     if not mailbox or not mailbox.SendBatch or type(mailbox.SendBatch.Fire) ~= "function" then return false end
@@ -1106,7 +1133,7 @@ local function sendMailBatch(userId, batch, note)
     return ok and success == true
 end
 
-local function tryAutoMail()
+function _G.tryAutoMail()
     if not genv.ftgs_AutoSendMail or isSendingMail then return end
     if mailUsername == "" then return end
     if os.clock() - lastMailTime < COOLDOWN.Mail then return end
@@ -1131,16 +1158,16 @@ local function tryAutoMail()
     end)
 end
 
-local function flatDistXZ(a, b)
+function _G.flatDistXZ(a, b)
     return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude
 end
 
-local function getPlayerFlatPos()
+function _G.getPlayerFlatPos()
     local hrp = getRoot()
     return hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z) or nil
 end
 
-local function getStealPrompt(fruit)
+function _G.getStealPrompt(fruit)
     local hp = fruit and fruit:FindFirstChild("HarvestPart")
     if not hp then return nil end
     local prompt = hp:FindFirstChild("StealPrompt")
@@ -1150,27 +1177,27 @@ local function getStealPrompt(fruit)
     return prompt or hp:FindFirstChildWhichIsA("ProximityPrompt")
 end
 
-local function isStealComplete(fruit, fruitCountBefore)
+function _G.isStealComplete(fruit, fruitCountBefore)
     if not fruit or not fruit.Parent then return true end
     if not getStealPrompt(fruit) then return true end
     if getFruitCount() > fruitCountBefore then return true end
     return false
 end
 
-local function getRarityRank(rarity) return RARITY_RANK[rarity] or 99 end
-local function getSeedRarity(seedName) local i = SeedDataByName[seedName] return i and i.Rarity or "Common" end
-local function getSeedPrice(name)
+function _G.getRarityRank(rarity) return RARITY_RANK[rarity] or 99 end
+function _G.getSeedRarity(seedName) local i = SeedDataByName[seedName] return i and i.Rarity or "Common" end
+function _G.getSeedPrice(name)
     local info = SeedDataByName[name]
     if not info then return math.huge end
     return (safeFlagGet(SeedShopFlags and SeedShopFlags.PriceOverrides))[name] or info.PurchasePrice
 end
-local function getGearPrice(name)
+function _G.getGearPrice(name)
     local info = GearDataByName[name]
     if not info then return math.huge end
     return (safeFlagGet(GearShopFlags and GearShopFlags.PriceOverrides))[name] or info.Cost or math.huge
 end
 
-local function findGearTool(attrName, priority)
+function _G.findGearTool(attrName, priority)
     local found = {}
     local function scan(c)
         if not c then return end
@@ -1184,7 +1211,7 @@ local function findGearTool(attrName, priority)
     return nil, nil
 end
 
-local function findSeedToolByName(seedName)
+function _G.findSeedToolByName(seedName)
     local function scan(c)
         if not c then return end
         for _, item in c:GetChildren() do
@@ -1197,7 +1224,7 @@ local function findSeedToolByName(seedName)
     return scan(LocalPlayer.Character) or scan(LocalPlayer:FindFirstChild("Backpack"))
 end
 
-local function pickNextPlantSeed()
+function _G.pickNextPlantSeed()
     for name in selectedPlantSeeds do
         local tool = findSeedToolByName(name)
         if tool then return name, tool end
@@ -1211,13 +1238,13 @@ local function pickNextPlantSeed()
     return nil, nil
 end
 
-local function equipTool(tool)
+function _G.equipTool(tool)
     if not tool then return end
     local hum = getHumanoid()
     if hum and tool.Parent ~= LocalPlayer.Character then hum:EquipTool(tool) task.wait(0.12) end
 end
 
-local function getSeedStock(name)
+function _G.getSeedStock(name)
     local item = StockItems:FindFirstChild(name)
     local maxStock = item and item.Value or 0
     local bought = 0
@@ -1227,7 +1254,7 @@ local function getSeedStock(name)
     return math.max(maxStock - bought, 0)
 end
 
-local function getGearStock(name)
+function _G.getGearStock(name)
     local item = GearStockItems:FindFirstChild(name)
     local maxStock = item and item.Value or 0
     local bought = 0
@@ -1237,7 +1264,7 @@ local function getGearStock(name)
     return math.max(maxStock - bought, 0)
 end
 
-local function countSeedOwned(name)
+function _G.countSeedOwned(name)
     local n = 0
     local function scan(c)
         if not c then return end
@@ -1257,7 +1284,7 @@ local function countSeedOwned(name)
     return n
 end
 
-local function getOccupiedPlantPositions()
+function _G.getOccupiedPlantPositions()
     local positions = {}
     refreshOwnerPlot()
     local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
@@ -1269,14 +1296,14 @@ local function getOccupiedPlantPositions()
     return positions
 end
 
-local function isSpotEmpty(pos, occupied)
+function _G.isSpotEmpty(pos, occupied)
     for _, p in occupied do
         if (Vector3.new(p.X, 0, p.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude < PLANT_MIN_DIST then return false end
     end
     return true
 end
 
-local function findPlantAreaPosition(nearPos)
+function _G.findPlantAreaPosition(nearPos)
     if #plantAreas == 0 then refreshPlantAreas() end
     if #plantAreas == 0 or not nearPos then return nil end
     local bestPos, bestDist
@@ -1287,7 +1314,7 @@ local function findPlantAreaPosition(nearPos)
     return bestPos
 end
 
-local function findEmptyGardenSpotNearPlayer()
+function _G.findEmptyGardenSpotNearPlayer()
     refreshOwnerPlot()
     if #plantAreas == 0 then refreshPlantAreas() end
     local playerFlat = getPlayerFlatPos()
@@ -1313,7 +1340,7 @@ local function findEmptyGardenSpotNearPlayer()
     return best
 end
 
-local function extractPlantDataPosition(plantData)
+function _G.extractPlantDataPosition(plantData)
     if type(plantData) ~= "table" then return nil end
     local positions = plantData.Positions or plantData.Position
     if typeof(positions) == "Vector3" then return positions end
@@ -1326,7 +1353,7 @@ local function extractPlantDataPosition(plantData)
     return nil
 end
 
-local function isSprinklerSpotTaken(pos, plantKey)
+function _G.isSprinklerSpotTaken(pos, plantKey)
     if plantKey and sprinkledPlantKeys[plantKey] then return true end
     for _, s in sprinkledSpots do
         if flatDistXZ(pos, s) < SPRINKLER_MIN_DIST then return true end
@@ -1334,7 +1361,7 @@ local function isSprinklerSpotTaken(pos, plantKey)
     return false
 end
 
-local function findBestSprinklerSpotNearPlayer()
+function _G.findBestSprinklerSpotNearPlayer()
     refreshOwnerPlot()
     local playerFlat = getPlayerFlatPos()
     if not playerFlat then return nil end
@@ -1382,7 +1409,7 @@ local function findBestSprinklerSpotNearPlayer()
     return nil
 end
 
-local function initMapFolders()
+function _G.initMapFolders()
     local map = Services.Workspace:FindFirstChild("Map")
     if map then
         WildPetFolder = map:FindFirstChild("WildPetRef")
@@ -1392,29 +1419,29 @@ local function initMapFolders()
 end
 initMapFolders()
 
-local function trackSeedBuy(name)
+function _G.trackSeedBuy(name)
     local p = getSeedPrice(name)
     local e = BoughtSeeds[name]
     if e then e.amount += 1 else BoughtSeeds[name] = { amount = 1, price = p } end
 end
-local function trackGearBuy(name)
+function _G.trackGearBuy(name)
     local p = getGearPrice(name)
     local e = BoughtGears[name]
     if e then e.amount += 1 else BoughtGears[name] = { amount = 1, price = p } end
 end
-local function trackPetBuy(name, price)
+function _G.trackPetBuy(name, price)
     local e = BoughtPets[name]
     if e then e.amount += 1 else BoughtPets[name] = { amount = 1, price = price or 0 } end
 end
 
-local function isDataReady(data)
+function _G.isDataReady(data)
     if type(data) ~= "table" then return false end
     local maxAge = data.MaxAge or 0
     local age = data.Age or 0
     return maxAge <= 0 or age >= maxAge
 end
 
-local function tryHarvestOne()
+function _G.tryHarvestOne()
     if not genv.ftgs_AutoHarvest then return end
     local n = 0
     local now = os.clock()
@@ -1447,7 +1474,7 @@ local function tryHarvestOne()
     end
 end
 
-local function tryBuySeedsFast()
+function _G.tryBuySeedsFast()
     if not genv.ftgs_AutoBuySeed and not genv.ftgs_AutoBuyAllSeed then return end
     local list = {}
     if genv.ftgs_AutoBuyAllSeed then
@@ -1472,7 +1499,7 @@ local function tryBuySeedsFast()
     end
 end
 
-local function tryBuyGearsFast()
+function _G.tryBuyGearsFast()
     if not genv.ftgs_AutoBuyGear and not genv.ftgs_AutoBuyAllGear then return end
     local list = {}
     if genv.ftgs_AutoBuyAllGear then
@@ -1489,7 +1516,7 @@ local function tryBuyGearsFast()
     end
 end
 
-local function tryAutoPlant()
+function _G.tryAutoPlant()
     if not genv.ftgs_AutoPlant or plantingBusy or not setHasAny(selectedPlantSeeds) then return end
     if os.clock() - lastPlant < COOLDOWN.Plant then return end
     if not isNearPlotForActions() then return end
@@ -1509,7 +1536,7 @@ local function tryAutoPlant()
     end)
 end
 
-local function trySprinkler()
+function _G.trySprinkler()
     if not genv.ftgs_AutoSprinkler or sprinklerBusy then return end
     if os.clock() - lastGear < COOLDOWN.Gear then return end
     if not isNearPlotForActions() then return end
@@ -1532,7 +1559,7 @@ local function trySprinkler()
     end)
 end
 
-local function tryShovel()
+function _G.tryShovel()
     if not genv.ftgs_AutoShovel or shovelBusy or not setHasAny(selectedShovelSeeds) then return end
     if os.clock() - lastShovel < COOLDOWN.Shovel then return end
     if not isNearPlotForActions() then return end
@@ -1587,7 +1614,7 @@ end
 
 -- ===== STEAL =====
 
-local function plotUnlocked(player)
+function _G.plotUnlocked(player)
     if not player or not Gardens then return false end
     local plot
     for _, p in Gardens:GetChildren() do
@@ -1602,7 +1629,7 @@ local function plotUnlocked(player)
     return true
 end
 
-local function calculateStealValue(fruit)
+function _G.calculateStealValue(fruit)
     local name = fruit:GetAttribute("CorePartName") or fruit:GetAttribute("PlantName")
     local size = fruit:GetAttribute("SizeMulti") or fruit:GetAttribute("Age")
     local mut = fruit:GetAttribute("Mutation")
@@ -1610,14 +1637,14 @@ local function calculateStealValue(fruit)
     return ok and val or 0
 end
 
-local function getPlotCenterPos(plot)
+function _G.getPlotCenterPos(plot)
     if not plot then return nil end
     local psr = plot:FindFirstChild("PlotSizeReference")
     if psr and psr:IsA("BasePart") then return psr.Position end
     return plot:GetPivot().Position
 end
 
-local function getStealableFruitsOnPlot(plot, limit)
+function _G.getStealableFruitsOnPlot(plot, limit)
     local list = {}
     if not plot then return list end
     local plants = plot:FindFirstChild("Plants")
@@ -1637,7 +1664,7 @@ local function getStealableFruitsOnPlot(plot, limit)
     return out
 end
 
-local function findBestStealPlot()
+function _G.findBestStealPlot()
     local bestPlot, bestOwner, bestValue = nil, nil, 0
     if not Gardens then return nil, nil end
     for _, plot in Gardens:GetChildren() do
@@ -1654,7 +1681,7 @@ local function findBestStealPlot()
     return bestPlot, bestOwner
 end
 
-local function fireProximityPrompt(prompt)
+function _G.fireProximityPrompt(prompt)
     if not prompt then return false end
     local fn = fireproximityprompt or rawget(genv, "fireproximityprompt")
     if type(fn) == "function" and select(1, xpcall(fn, noopErr, prompt, 0)) then return true end
@@ -1666,7 +1693,7 @@ local function fireProximityPrompt(prompt)
     end, noopErr)
 end
 
-local function stealFruit(fruit, ownerUserId)
+function _G.stealFruit(fruit, ownerUserId)
     if not fruit or not fruit.Parent then return false end
     local hp = fruit:FindFirstChild("HarvestPart")
     if not hp then return false end
@@ -1706,7 +1733,7 @@ local function stealFruit(fruit, ownerUserId)
     return false
 end
 
-local function tryAutoSteal()
+function _G.tryAutoSteal()
     if not genv.ftgs_AutoSteal or stealBusy or isInventoryFull() then return end
     stealBusy = true
     task.spawn(function()
@@ -1727,7 +1754,7 @@ end
 
 -- ===== PET =====
 
-local function resolveRefFromModel(model)
+function _G.resolveRefFromModel(model)
     if not model or not WildPetFolder then return nil end
     local refName = string.match(model.Name, "^WildPet_.-_(.+)$")
     local ref = refName and WildPetFolder:FindFirstChild(refName)
@@ -1738,7 +1765,7 @@ local function resolveRefFromModel(model)
     return nil
 end
 
-local function isRefTameable(refPart)
+function _G.isRefTameable(refPart)
     if not refPart or not refPart:IsA("BasePart") or not refPart.Parent then return false end
     local ownerId = refPart:GetAttribute("OwnerUserId")
     if ownerId == LocalPlayer.UserId then return false end
@@ -1748,7 +1775,7 @@ local function isRefTameable(refPart)
     return true
 end
 
-local function tryBuyPet()
+function _G.tryBuyPet()
     if not genv.ftgs_AutoBuyPet or not WildPetSpawns or isCatchingPet then return end
     if os.clock() - lastPet < COOLDOWN.Pet then return end
     initMapFolders()
@@ -1810,7 +1837,7 @@ local function tryBuyPet()
     end)
 end
 
-local function hasIntruderOnPlot()
+function _G.hasIntruderOnPlot()
     refreshOwnerPlot()
     local area = OwnerPlot and OwnerPlot:FindFirstChild("Visual") and OwnerPlot.Visual:FindFirstChild("PlotSizeReferenceVisual")
     if not area then return false end
@@ -1824,7 +1851,7 @@ local function hasIntruderOnPlot()
     return false
 end
 
-local function tryAntiStealGuard()
+function _G.tryAntiStealGuard()
     if not genv.ftgs_AntiStealGuard or not hasIntruderOnPlot() then return end
     local hrp, cf = getRoot(), getPlotCenterCFrame()
     if hrp and cf then
@@ -1834,7 +1861,7 @@ local function tryAntiStealGuard()
     end
 end
 
-local function scanServerForPet(petName)
+function _G.scanServerForPet(petName)
     if not WildPetSpawns then return false end
     for _, model in WildPetSpawns:GetChildren() do
         if model:IsA("Model") and matchesPet(model:GetAttribute("PetName"), model:GetAttribute("PetSize"), petName) then return true end
@@ -1842,7 +1869,7 @@ local function scanServerForPet(petName)
     return false
 end
 
-local function hopToRandomServer()
+function _G.hopToRandomServer()
     local ok, servers = xpcall(function()
         return Services.HttpService:JSONDecode(universalHttpGet(
             "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
@@ -1860,7 +1887,7 @@ end
 
 -- ===== WEBHOOK / OTHER =====
 
-local function buildSeedShopText()
+function _G.buildSeedShopText()
     local lines = {}
     for _, ch in ipairs(StockItems:GetChildren()) do
         if ch:IsA("ValueBase") and ch.Value > 0 then lines[#lines + 1] = string.format("%s | %d | %d", ch.Name, ch.Value, getSeedPrice(ch.Name)) end
@@ -1869,7 +1896,7 @@ local function buildSeedShopText()
     return #lines > 0 and table.concat(lines, "\n") or "Waiting restock..."
 end
 
-local function buildGearShopText()
+function _G.buildGearShopText()
     local lines = {}
     for _, ch in ipairs(GearStockItems:GetChildren()) do
         if ch:IsA("ValueBase") and ch.Value > 0 then lines[#lines + 1] = string.format("%s | %d | %d", ch.Name, ch.Value, getGearPrice(ch.Name)) end
@@ -1878,14 +1905,14 @@ local function buildGearShopText()
     return #lines > 0 and table.concat(lines, "\n") or "Waiting restock..."
 end
 
-local function getWeatherInfo()
+function _G.getWeatherInfo()
     local weather = Services.Workspace:GetAttribute("ActiveWeather") or Services.Workspace:GetAttribute("ActivePhase") or "Unknown"
     local phaseEnd = Services.Workspace:GetAttribute("PhaseDuration") or 0
     local remain = math.max(0, math.floor((phaseEnd - Services.Workspace:GetServerTimeNow()) + 0.5))
     return weather, remain
 end
 
-local function buildWebhookEmbed()
+function _G.buildWebhookEmbed()
     local weather, remain = getWeatherInfo()
     local seedLines, gearLines, petLines, stealLines = {}, {}, {}, {}
     for name, d in BoughtSeeds do seedLines[#seedLines + 1] = name .. " | " .. d.amount .. " | " .. d.price end
@@ -1910,19 +1937,19 @@ local function buildWebhookEmbed()
     }
 end
 
-local function sendWebhook()
+function _G.sendWebhook()
     if webhookUrl == "" then return end
     httpPost(webhookUrl, Services.HttpService:JSONEncode({ username = "NTMT HUB", embeds = { buildWebhookEmbed() } }))
 end
 
-local function trySellAll()
+function _G.trySellAll()
     if not genv.ftgs_AutoSell or not isInventoryFull() then return end
     if os.clock() - lastSellTry < COOLDOWN.Sell then return end
     lastSellTry = os.clock()
     safeNetCall(Net.NPCS and Net.NPCS.SellAll)
 end
 
-local function tryExpand()
+function _G.tryExpand()
     if not genv.ftgs_AutoExpand then return end
     if os.clock() - lastExpand < COOLDOWN.Expand then return end
     local owned = (PlayerReplica and PlayerReplica.Data and PlayerReplica.Data.OwnedExpansions) or 1
@@ -1934,7 +1961,7 @@ local function tryExpand()
     safeNetCall(Net.Actions and Net.Actions.ExpandGarden)
 end
 
-local function applyMovement()
+function _G.applyMovement()
     local hum = getHumanoid()
     if not hum then return end
     hum.UseJumpPower = true
@@ -1942,7 +1969,7 @@ local function applyMovement()
     hum.JumpPower = desiredJumpPower
 end
 
-local function tryCollectMutationSeedsOnce()
+function _G.tryCollectMutationSeedsOnce()
     if not genv.ftgs_AutoCollectMutation or collectingMutation or not SeedPackSpawns then return end
     collectingMutation = true
     task.spawn(function()
@@ -1962,7 +1989,7 @@ local function tryCollectMutationSeedsOnce()
     end)
 end
 
-local function findNearestDropPrompt()
+function _G.findNearestDropPrompt()
     local hrp = getRoot()
     if not hrp then return nil end
     local best, bestDist
@@ -1980,7 +2007,7 @@ local function findNearestDropPrompt()
     return best
 end
 
-local function tryCollectDrops()
+function _G.tryCollectDrops()
     if not genv.ftgs_AutoCollectDrops or collectingMutation or isCatchingPet or dropsBusy then return end
     local nearest = findNearestDropPrompt()
     if not nearest then return end
@@ -1995,7 +2022,7 @@ local function tryCollectDrops()
     end)
 end
 
-local function hexColor(hex)
+function _G.hexColor(hex)
     if Color3.fromHex then
         local ok, c = xpcall(Color3.fromHex, noopErr, hex)
         if ok and typeof(c) == "Color3" then return c end
@@ -2004,7 +2031,7 @@ local function hexColor(hex)
     return Color3.fromRGB(tonumber(hex:sub(1, 2), 16) or 255, tonumber(hex:sub(3, 4), 16) or 255, tonumber(hex:sub(5, 6), 16) or 255)
 end
 
-local function applyUITheme(name)
+function _G.applyUITheme(name)
     selectedUITheme = name or selectedUITheme or "Black"
     local c = UI_THEMES[selectedUITheme] or UI_THEMES.Black
     local themeName = "NTMT_" .. selectedUITheme
@@ -2036,7 +2063,7 @@ end
 
 -- ===== WINDUI =====
 
-local Window = WindUI:CreateWindow({
+_G.Window = WindUI:CreateWindow({
     Title = "NTMT HUB | Grow a Garden 2",
     Author = MADE_BY .. " | " .. Executor,
     Folder = "ntmthub",
@@ -2049,11 +2076,11 @@ if type(Window.Tag) == "function" then
 end
 applyUITheme(selectedUITheme)
 
-local function makeToggle(tab, title, desc, key)
+function _G.makeToggle(tab, title, desc, key)
     tab:Toggle({ Title = title, Desc = desc, Default = genv[key] or false, Callback = function(s) genv[key] = s end })
 end
 
-local function multiDropdown(tab, title, values, selected, allowNone)
+function _G.multiDropdown(tab, title, values, selected, allowNone)
     tab:Dropdown({
         Title = title,
         Values = values,
@@ -2063,7 +2090,7 @@ local function multiDropdown(tab, title, values, selected, allowNone)
     })
 end
 
-local MainTab = Window:Tab({ Title = "Main", Icon = "home" })
+_G.MainTab = Window:Tab({ Title = "Main", Icon = "home" })
 MainTab:Section({ Title = "Farm" })
 makeToggle(MainTab, "Auto Harvest", "Collect ripe fruit only", "ftgs_AutoHarvest")
 makeToggle(MainTab, "Auto Sell", "Sell when bag full", "ftgs_AutoSell")
@@ -2092,7 +2119,7 @@ MainTab:Input({ Title = "Mail message", Value = mailMessage, Placeholder = "mess
     saveConfig()
 end })
 
-local AutoTab = Window:Tab({ Title = "Automation", Icon = "bot" })
+_G.AutoTab = Window:Tab({ Title = "Automation", Icon = "bot" })
 makeToggle(AutoTab, "Auto Steal", "TP fruit -> hold still until stolen", "ftgs_AutoSteal")
 makeToggle(AutoTab, "Auto Collect Drops", "TP nearest drop + pickup", "ftgs_AutoCollectDrops")
 makeToggle(AutoTab, "Auto Collect Mutation Seeds", "Slow fly rainbow/gold/mega", "ftgs_AutoCollectMutation")
@@ -2103,7 +2130,7 @@ multiDropdown(AutoTab, "Shovel Seeds", SeedNames, selectedShovelSeeds, false)
 makeToggle(AutoTab, "Auto Buy Pet", "Segmented fly + tame", "ftgs_AutoBuyPet")
 multiDropdown(AutoTab, "Select Pets", PET_LIST, selectedPets, false)
 
-local ShopTab = Window:Tab({ Title = "Shop", Icon = "shopping-cart" })
+_G.ShopTab = Window:Tab({ Title = "Shop", Icon = "shopping-cart" })
 makeToggle(ShopTab, "Auto Buy Seed", "Fast seed buy", "ftgs_AutoBuySeed")
 makeToggle(ShopTab, "Auto Buy All Seed", "Buy all in stock", "ftgs_AutoBuyAllSeed")
 ShopTab:Dropdown({ Title = "Select Seeds", Values = PlantSeedNames, Multi = true, AllowNone = true, Callback = function(sel)
@@ -2121,11 +2148,11 @@ ShopTab:Dropdown({ Title = "Select Gears", Values = GearNames, Multi = true, All
     end end
 end })
 ShopTab:Section({ Title = "Seed Shop (live)" })
-local seedShopLive = ShopTab:Paragraph({ Title = "name | amount | price", Desc = "Loading..." })
+_G.seedShopLive = ShopTab:Paragraph({ Title = "name | amount | price", Desc = "Loading..." })
 ShopTab:Section({ Title = "Gear Shop (live)" })
-local gearShopLive = ShopTab:Paragraph({ Title = "name | amount | price", Desc = "Loading..." })
+_G.gearShopLive = ShopTab:Paragraph({ Title = "name | amount | price", Desc = "Loading..." })
 
-local ServerTab = Window:Tab({ Title = "Server Hop", Icon = "globe" })
+_G.ServerTab = Window:Tab({ Title = "Server Hop", Icon = "globe" })
 makeToggle(ServerTab, "Auto Hop Server", "Hop every 30s", "ftgs_AutoHop")
 ServerTab:Button({ Title = "Hop Server (1 click)", Icon = "shuffle", Callback = function() hopToRandomServer() end })
 ServerTab:Button({ Title = "Rejoin Server", Icon = "refresh-cw", Callback = function()
@@ -2142,7 +2169,7 @@ ServerTab:Dropdown({ Title = "Pet to Find", Values = PET_LIST, Value = selectedF
     selectedFindPet = v or selectedFindPet
 end })
 
-local SettingsTab = Window:Tab({ Title = "Settings", Icon = "settings" })
+_G.SettingsTab = Window:Tab({ Title = "Settings", Icon = "settings" })
 SettingsTab:Section({ Title = "UI Theme" })
 SettingsTab:Dropdown({ Title = "UI Color", Values = UI_THEME_NAMES, Value = selectedUITheme, Callback = function(v)
     if type(v) == "table" then v = v[1] end
@@ -2167,7 +2194,7 @@ SettingsTab:Slider({ Title = "Jump Power", Step = 1, Value = { Min = 50, Max = 5
 makeToggle(SettingsTab, "Anti Hit", "No knockback from shovel", "ftgs_AntiHit")
 makeToggle(SettingsTab, "Anti Steal Guard", "Lock plot when intruder enters", "ftgs_AntiStealGuard")
 
-local InfoTab = Window:Tab({ Title = "Info", Icon = "info" })
+_G.InfoTab = Window:Tab({ Title = "Info", Icon = "info" })
 InfoTab:Paragraph({ Title = "Discord", Desc = DISCORD_LINK })
 InfoTab:Button({ Title = "Copy Discord Link", Icon = "copy", Callback = function()
     if setclipboard then xpcall(setclipboard, noopErr, DISCORD_LINK) end
@@ -2175,13 +2202,13 @@ InfoTab:Button({ Title = "Copy Discord Link", Icon = "copy", Callback = function
 end })
 InfoTab:Paragraph({ Title = "Executor", Desc = Executor })
 InfoTab:Paragraph({ Title = "Roblox User", Desc = LocalPlayer.Name })
-local activePara = InfoTab:Paragraph({ Title = "Active", Desc = "0h 00m 00s" })
+_G.activePara = InfoTab:Paragraph({ Title = "Active", Desc = "0h 00m 00s" })
 InfoTab:Paragraph({ Title = "Made by", Desc = MADE_BY })
 
 -- ===== LOOPS =====
 
 
-local function safeLoop(fn)
+function _G.safeLoop(fn)
     xpcall(fn, noopErr)
 end
 
@@ -2372,6 +2399,238 @@ pcall(function()
     })
 end)
 
+
+
+-- sync _G -> genv (Delta / getgenv)
+do
+    local _sync = {
+        "AutoTab",
+        "BoughtGears",
+        "BoughtPets",
+        "BoughtSeeds",
+        "CONFIG_FILE",
+        "COOLDOWN",
+        "ExpansionPrices",
+        "FLY_STEP",
+        "FruitValueCalc",
+        "GardenFlags",
+        "Gardens",
+        "GearDataByName",
+        "GearNames",
+        "GearShopData",
+        "GearShopFlags",
+        "GearStockItems",
+        "HARVEST_BATCH",
+        "InfoTab",
+        "LocalPlayer",
+        "MAIL_GEAR_CATEGORIES",
+        "MAIL_MAX_PER_GIFT",
+        "MAIL_SEND_GAP",
+        "MUTATION_COLLECT_WAIT",
+        "MainTab",
+        "NEAR_PLAYER_DIST",
+        "Net",
+        "OwnerPlot",
+        "PET_FIND_SCAN_SEC",
+        "PET_LIST",
+        "PLANT_MIN_DIST",
+        "PLOT_EDGE_MARGIN",
+        "PetData",
+        "PetSizes",
+        "PlantSeedNames",
+        "PlayerPlot",
+        "PlayerReplica",
+        "PlayerState",
+        "RARITY_RANK",
+        "SEGMENT_PAUSE",
+        "SHOVEL_BATCH",
+        "SLOW_FLY_RATIO",
+        "SPRINKLER_LIST",
+        "SPRINKLER_MIN_DIST",
+        "STEAL_BATCH",
+        "STEAL_HOLD_TIMEOUT",
+        "SeedData",
+        "SeedDataByName",
+        "SeedNames",
+        "SeedPackSpawns",
+        "SeedShopFlags",
+        "ServerTab",
+        "Services",
+        "SettingsTab",
+        "Shared",
+        "ShopTab",
+        "StockItems",
+        "StolenFruits",
+        "UI_THEMES",
+        "UI_THEME_NAMES",
+        "WATERING_CAN_LIST",
+        "WildPetFolder",
+        "WildPetSpawns",
+        "Window",
+        "activePara",
+        "applyMovement",
+        "applyUITheme",
+        "buildGearShopText",
+        "buildPriorityList",
+        "buildSeedShopText",
+        "buildWebhookEmbed",
+        "cachePlantPositions",
+        "calculateStealValue",
+        "collectingMutation",
+        "countSeedOwned",
+        "desiredJumpPower",
+        "desiredWalkSpeed",
+        "dropsBusy",
+        "equipTool",
+        "extractPlantDataPosition",
+        "findBestSprinklerSpotNearPlayer",
+        "findBestStealPlot",
+        "findEmptyGardenSpotNearPlayer",
+        "findGearMailCategory",
+        "findGearTool",
+        "findNearestDropPrompt",
+        "findPlantAreaPosition",
+        "findSeedToolByName",
+        "fireProximityPrompt",
+        "firedSet",
+        "flatDistXZ",
+        "flySteps",
+        "formatDuration",
+        "gardenActionLock",
+        "gearShopLive",
+        "getFruitCount",
+        "getGearPrice",
+        "getGearStandPos",
+        "getGearStock",
+        "getHumanoid",
+        "getMaxFruitCapacity",
+        "getOccupiedPlantPositions",
+        "getPetDisplayName",
+        "getPlantSeedName",
+        "getPlayerFlatPos",
+        "getPlotCenterCFrame",
+        "getPlotCenterPos",
+        "getRarityRank",
+        "getRoot",
+        "getSeedPrice",
+        "getSeedRarity",
+        "getSeedStock",
+        "getSheckles",
+        "getStealPrompt",
+        "getStealableFruitsOnPlot",
+        "getWeatherInfo",
+        "hasIntruderOnPlot",
+        "hexColor",
+        "holdGardenStill",
+        "hookGardenRemotes",
+        "hopToRandomServer",
+        "initMapFolders",
+        "inputJobId",
+        "isCatchingPet",
+        "isDataReady",
+        "isExcludedPlantBuySeed",
+        "isInventoryFull",
+        "isNearPlotForActions",
+        "isRefTameable",
+        "isSendingMail",
+        "isSpotEmpty",
+        "isSprinklerSpotTaken",
+        "isStandingOnPlot",
+        "isStealComplete",
+        "isWithinPlot",
+        "lastExpand",
+        "lastGear",
+        "lastMailTime",
+        "lastPet",
+        "lastPlant",
+        "lastSellTry",
+        "lastShovel",
+        "loadConfig",
+        "lookupMailUserId",
+        "mailGearAmount",
+        "mailGearName",
+        "mailMessage",
+        "mailSeedAmount",
+        "mailSeedName",
+        "mailUsername",
+        "makeToggle",
+        "matchesAnySelectedPet",
+        "matchesPet",
+        "movementBypass",
+        "multiDropdown",
+        "myUserId",
+        "normalizePetName",
+        "normalizeSeedKey",
+        "parseMultiSelect",
+        "petCatchCooldown",
+        "petFindBusy",
+        "pickNextPlantSeed",
+        "plantAreas",
+        "plantingBusy",
+        "plotUnlocked",
+        "refreshOwnerPlot",
+        "refreshPlantAreas",
+        "resolveRefFromModel",
+        "returnToGarden",
+        "safeLoop",
+        "safeRequire",
+        "saveConfig",
+        "savedPlantPositions",
+        "savedPlotCenter",
+        "savedPlotSize",
+        "scanServerForPet",
+        "seedInSet",
+        "seedNamesMatch",
+        "seedShopLive",
+        "segmentedFlyTo",
+        "selectedBuyGears",
+        "selectedBuySeeds",
+        "selectedFindPet",
+        "selectedPets",
+        "selectedPlantSeeds",
+        "selectedShovelSeeds",
+        "selectedSprinklers",
+        "selectedUITheme",
+        "sendMailBatch",
+        "sendWebhook",
+        "sessionStart",
+        "setHasAny",
+        "shovelBusy",
+        "slowFlyTo",
+        "sprinkledPlantKeys",
+        "sprinkledSpots",
+        "sprinklerBusy",
+        "stealBusy",
+        "stealFruit",
+        "timeAgo",
+        "totalPlaySeconds",
+        "tpInstant",
+        "trackGearBuy",
+        "trackPetBuy",
+        "trackSeedBuy",
+        "trackedPlants",
+        "tryAntiStealGuard",
+        "tryAutoMail",
+        "tryAutoPlant",
+        "tryAutoSteal",
+        "tryBuyGearsFast",
+        "tryBuyPet",
+        "tryBuySeedsFast",
+        "tryCollectDrops",
+        "tryCollectMutationSeedsOnce",
+        "tryExpand",
+        "tryHarvestOne",
+        "trySellAll",
+        "tryShovel",
+        "trySprinkler",
+        "waitTag",
+        "webhookIntervalMin",
+        "webhookUrl",
+    }
+    for _, k in ipairs(_sync) do
+        if _G[k] ~= nil then genv[k] = _G[k] end
+    end
+end
 end -- runMain
 
 task.defer(function()
