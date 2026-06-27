@@ -1,6 +1,18 @@
 --[[ NTMT HUB - Grow a Garden 2 v6.0 | made by nguoitinhmuathu ]]
 print("[NTMT HUB] BOOT v6.0")
 
+pcall(function()
+    if delfile and isfile then
+        for _, f in ipairs({
+            "ntmthub/windui_patched_v3.lua",
+            "ntmthub/windui_patched_v4.lua",
+            "ntmthub/windui_patched_v5.lua",
+        }) do
+            if isfile(f) then delfile(f) end
+        end
+    end
+end)
+
 local DISCORD_LINK = "https://discord.gg/your-invite"
 local MADE_BY = "nguoitinhmuathu"
 
@@ -124,19 +136,350 @@ local function patchWindUISource(body)
     return body, not stillBad
 end
 
+local function buildWindUIEnv()
+    local env = {}
+    for k, v in pairs(_G) do env[k] = v end
+    for k, v in pairs(genv) do env[k] = v end
+    env.game = game
+    env.workspace = workspace
+    env.script = env.script or script
+    env.getgenv = getgenv or function() return genv end
+    env._G = genv
+    return setmetatable(env, {
+        __index = function(t, k)
+            local v = rawget(t, k)
+            if v ~= nil then return v end
+            v = genv[k]
+            if v ~= nil then return v end
+            return _G[k]
+        end,
+    })
+end
+
 local function compileWindUIChunk(body)
+    local env = buildWindUIEnv()
+    if type(load) == "function" then
+        local chunk, err = load(body, "WindUI", "t", env)
+        if type(chunk) == "function" then return chunk end
+        if err then return nil, err end
+    end
     if type(loadstring) == "function" then
         local chunk, err = loadstring(body, "WindUI")
         if type(chunk) ~= "function" then return nil, err end
+        if setfenv then
+            pcall(function() setfenv(chunk, env) end)
+        end
         return chunk
-    end
-    if type(load) == "function" then
-        return load(body, "WindUI", "t", genv)
     end
     return nil, "no loadstring/load"
 end
 
-local WINDUI_CACHE = "ntmthub/windui_patched_v5.lua"
+local WINDUI_CACHE = "ntmthub/windui_patched_v6.lua"
+
+local function createBuiltinWindUI()
+    local lp = game:GetService("Players").LocalPlayer
+    if not lp then return nil end
+    local pg = lp:FindFirstChild("PlayerGui") or lp:WaitForChild("PlayerGui", 10)
+    if not pg then return nil end
+    local old = pg:FindFirstChild("NTMTHubUI")
+    if old then old:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "NTMTHubUI"
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.Parent = pg
+
+    local openBtn = Instance.new("TextButton")
+    openBtn.Size = UDim2.fromOffset(96, 36)
+    openBtn.Position = UDim2.new(0, 10, 0.45, 0)
+    openBtn.BackgroundColor3 = Color3.fromRGB(255, 79, 216)
+    openBtn.Text = "NTMT HUB"
+    openBtn.TextColor3 = Color3.new(1, 1, 1)
+    openBtn.Font = Enum.Font.GothamBold
+    openBtn.TextSize = 13
+    openBtn.Parent = sg
+    Instance.new("UICorner", openBtn).CornerRadius = UDim.new(0, 8)
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.new(0.82, 0, 0.74, 0)
+    panel.Position = UDim2.new(0.09, 0, 0.13, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+    panel.Visible = false
+    panel.Parent = sg
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, -8, 0, 30)
+    header.BackgroundTransparency = 1
+    header.Text = "NTMT HUB | Grow a Garden 2"
+    header.TextColor3 = Color3.new(1, 1, 1)
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 14
+    header.Parent = panel
+
+    local tabBar = Instance.new("Frame")
+    tabBar.Size = UDim2.new(1, -8, 0, 26)
+    tabBar.Position = UDim2.new(0, 4, 0, 32)
+    tabBar.BackgroundTransparency = 1
+    tabBar.Parent = panel
+    local tabBarLayout = Instance.new("UIListLayout")
+    tabBarLayout.FillDirection = Enum.FillDirection.Horizontal
+    tabBarLayout.Padding = UDim.new(0, 4)
+    tabBarLayout.Parent = tabBar
+
+    local body = Instance.new("Frame")
+    body.Size = UDim2.new(1, -8, 1, -64)
+    body.Position = UDim2.new(0, 4, 0, 60)
+    body.BackgroundTransparency = 1
+    body.ClipsDescendants = true
+    body.Parent = panel
+
+    openBtn.MouseButton1Click:Connect(function() panel.Visible = not panel.Visible end)
+
+    local tabFrames, tabBtns, firstTabShown = {}, {}, false
+
+    local function makeTab(title)
+        local holder = Instance.new("Frame")
+        holder.Name = title
+        holder.Size = UDim2.fromScale(1, 1)
+        holder.BackgroundTransparency = 1
+        holder.Visible = false
+        holder.Parent = body
+
+        local scroll = Instance.new("ScrollingFrame")
+        scroll.Size = UDim2.fromScale(1, 1)
+        scroll.BackgroundTransparency = 1
+        scroll.ScrollBarThickness = 3
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scroll.Parent = holder
+        local list = Instance.new("UIListLayout")
+        list.Padding = UDim.new(0, 5)
+        list.SortOrder = Enum.SortOrder.LayoutOrder
+        list.Parent = scroll
+        list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            scroll.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 8)
+        end)
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.fromOffset(math.max(48, #title * 7), 22)
+        btn.Text = title
+        btn.TextSize = 9
+        btn.Font = Enum.Font.GothamBold
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        btn.Parent = tabBar
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
+        tabFrames[title] = holder
+        tabBtns[title] = btn
+        if not firstTabShown then
+            firstTabShown = true
+            holder.Visible = true
+            btn.BackgroundColor3 = Color3.fromRGB(255, 79, 216)
+        end
+        btn.MouseButton1Click:Connect(function()
+            for name, fr in pairs(tabFrames) do
+                fr.Visible = name == title
+                tabBtns[name].BackgroundColor3 = name == title and Color3.fromRGB(255, 79, 216) or Color3.fromRGB(45, 45, 45)
+            end
+        end)
+
+        local order = 0
+        local tabObj = {}
+
+        function tabObj:Section(cfg)
+            order += 1
+            local l = Instance.new("TextLabel")
+            l.Size = UDim2.new(1, -6, 0, 20)
+            l.LayoutOrder = order
+            l.BackgroundTransparency = 1
+            l.TextXAlignment = Enum.TextXAlignment.Left
+            l.Font = Enum.Font.GothamBold
+            l.TextSize = 12
+            l.TextColor3 = Color3.fromRGB(255, 79, 216)
+            l.Text = tostring(cfg and cfg.Title or "")
+            l.Parent = scroll
+        end
+
+        function tabObj:Toggle(cfg)
+            order += 1
+            local on = cfg.Default == true
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, -6, 0, 28)
+            b.LayoutOrder = order
+            b.Font = Enum.Font.Gotham
+            b.TextSize = 11
+            b.TextColor3 = Color3.new(1, 1, 1)
+            b.Text = (on and "[ON] " or "[OFF] ") .. tostring(cfg.Title or "")
+            b.BackgroundColor3 = on and Color3.fromRGB(90, 30, 75) or Color3.fromRGB(35, 35, 35)
+            b.Parent = scroll
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            b.MouseButton1Click:Connect(function()
+                on = not on
+                b.Text = (on and "[ON] " or "[OFF] ") .. tostring(cfg.Title or "")
+                b.BackgroundColor3 = on and Color3.fromRGB(90, 30, 75) or Color3.fromRGB(35, 35, 35)
+                if cfg.Callback then cfg.Callback(on) end
+            end)
+        end
+
+        function tabObj:Button(cfg)
+            order += 1
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, -6, 0, 28)
+            b.LayoutOrder = order
+            b.Text = tostring(cfg.Title or "Button")
+            b.Font = Enum.Font.Gotham
+            b.TextSize = 11
+            b.TextColor3 = Color3.new(1, 1, 1)
+            b.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+            b.Parent = scroll
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            b.MouseButton1Click:Connect(function() if cfg.Callback then cfg.Callback() end end)
+        end
+
+        function tabObj:Input(cfg)
+            order += 1
+            local box = Instance.new("TextBox")
+            box.Size = UDim2.new(1, -6, 0, 28)
+            box.LayoutOrder = order
+            box.ClearTextOnFocus = false
+            box.PlaceholderText = tostring(cfg.Placeholder or cfg.Title or "")
+            box.Text = tostring(cfg.Value or "")
+            box.Font = Enum.Font.Gotham
+            box.TextSize = 11
+            box.TextColor3 = Color3.new(1, 1, 1)
+            box.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+            box.Parent = scroll
+            Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+            box.FocusLost:Connect(function() if cfg.Callback then cfg.Callback(box.Text) end end)
+        end
+
+        function tabObj:Dropdown(cfg)
+            order += 1
+            local values = cfg.Values or {}
+            local idx = 1
+            if cfg.Value then
+                for i, v in ipairs(values) do if v == cfg.Value then idx = i break end end
+            end
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, -6, 0, 28)
+            b.LayoutOrder = order
+            b.Font = Enum.Font.Gotham
+            b.TextSize = 10
+            b.TextWrapped = true
+            b.TextColor3 = Color3.new(1, 1, 1)
+            b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            b.Parent = scroll
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            local function paint()
+                b.Text = tostring(cfg.Title or "Select") .. ": " .. tostring(values[idx] or "-")
+            end
+            paint()
+            b.MouseButton1Click:Connect(function()
+                if #values == 0 then return end
+                idx = (idx % #values) + 1
+                paint()
+                if not cfg.Callback then return end
+                if cfg.Multi then cfg.Callback({ [values[idx]] = true }) else cfg.Callback(values[idx]) end
+            end)
+        end
+
+        function tabObj:Paragraph(cfg)
+            order += 1
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(1, -6, 0, 16)
+            t.LayoutOrder = order
+            t.BackgroundTransparency = 1
+            t.TextXAlignment = Enum.TextXAlignment.Left
+            t.Font = Enum.Font.GothamBold
+            t.TextSize = 11
+            t.TextColor3 = Color3.new(1, 1, 1)
+            t.Text = tostring(cfg.Title or "")
+            t.Parent = scroll
+            order += 1
+            local d = Instance.new("TextLabel")
+            d.Size = UDim2.new(1, -6, 0, 36)
+            d.LayoutOrder = order
+            d.BackgroundTransparency = 1
+            d.TextXAlignment = Enum.TextXAlignment.Left
+            d.TextYAlignment = Enum.TextYAlignment.Top
+            d.Font = Enum.Font.Gotham
+            d.TextSize = 10
+            d.TextWrapped = true
+            d.TextColor3 = Color3.fromRGB(190, 190, 190)
+            d.Text = tostring(cfg.Desc or "")
+            d.Parent = scroll
+            return {
+                SetDesc = function(_, text)
+                    d.Text = tostring(text or "")
+                end,
+            }
+        end
+
+        function tabObj:Slider(cfg)
+            order += 1
+            local val = (cfg.Value and cfg.Value.Default) or 16
+            local minV = (cfg.Value and cfg.Value.Min) or 0
+            local maxV = (cfg.Value and cfg.Value.Max) or 999
+            local step = cfg.Step or 1
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, -6, 0, 28)
+            row.LayoutOrder = order
+            row.BackgroundTransparency = 1
+            row.Parent = scroll
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(0.55, 0, 1, 0)
+            lbl.BackgroundTransparency = 1
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.Font = Enum.Font.Gotham
+            lbl.TextSize = 11
+            lbl.TextColor3 = Color3.new(1, 1, 1)
+            lbl.Text = tostring(cfg.Title or "Value") .. ": " .. tostring(val)
+            lbl.Parent = row
+            local minus = Instance.new("TextButton")
+            minus.Size = UDim2.new(0.2, 0, 1, 0)
+            minus.Position = UDim2.new(0.58, 0, 0, 0)
+            minus.Text = "-"
+            minus.Parent = row
+            local plus = Instance.new("TextButton")
+            plus.Size = UDim2.new(0.2, 0, 1, 0)
+            plus.Position = UDim2.new(0.8, 0, 0, 0)
+            plus.Text = "+"
+            plus.Parent = row
+            local function set(v)
+                val = math.clamp(v, minV, maxV)
+                lbl.Text = tostring(cfg.Title or "Value") .. ": " .. tostring(val)
+                if cfg.Callback then cfg.Callback(val) end
+            end
+            minus.MouseButton1Click:Connect(function() set(val - step) end)
+            plus.MouseButton1Click:Connect(function() set(val + step) end)
+        end
+
+        return tabObj
+    end
+
+    local lib = {}
+    function lib:CreateWindow(_cfg)
+        local win = {}
+        function win:Tag() end
+        function win:Tab(cfg) return makeTab(tostring(cfg and cfg.Title or "Tab")) end
+        return win
+    end
+    function lib:Notify(cfg)
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = cfg.Title or "NTMT HUB",
+                Text = cfg.Content or "",
+                Duration = cfg.Duration or 4,
+            })
+        end)
+    end
+    function lib:AddTheme() end
+    function lib:SetTheme() end
+    print("[NTMT HUB] Built-in UI OK (WindUI skipped on this executor)")
+    return lib
+end
 
 local function safeNetCall(remote, ...)
     if not remote then return false end
@@ -184,9 +527,15 @@ end
 
 local WindUI
 local function loadWindUI()
+    local function finishWithLib(lib)
+        if type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then return false end
+        WindUI = lib
+        return true
+    end
+
     if type(loadstring) ~= "function" and type(load) ~= "function" then
-        hubWarn("loadstring/load missing on this executor")
-        return false
+        hubWarn("loadstring missing — using built-in UI")
+        return finishWithLib(createBuiltinWindUI())
     end
 
     local body, patchedOk
@@ -199,7 +548,6 @@ local function loadWindUI()
                 print("[NTMT HUB] Using cached patched WindUI")
             elseif delfile then
                 pcall(delfile, WINDUI_CACHE)
-                hubWarn("Deleted bad WindUI cache — will re-download")
             end
         end
     end
@@ -207,13 +555,13 @@ local function loadWindUI()
     if not patchedOk then
         body = universalHttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
         if type(body) ~= "string" or #body < 1000 then
-            hubWarn("Could not download WindUI (check HttpGet / internet)")
-            return false
+            hubWarn("WindUI download failed — using built-in UI")
+            return finishWithLib(createBuiltinWindUI())
         end
         body, patchedOk = patchWindUISource(body)
         if not patchedOk then
-            hubWarn("WindUI GetIcons patch FAILED — send console log to dev")
-            return false
+            hubWarn("WindUI patch failed — using built-in UI")
+            return finishWithLib(createBuiltinWindUI())
         end
         if writefile then
             pcall(function()
@@ -227,21 +575,17 @@ local function loadWindUI()
 
     local chunk, compileErr = compileWindUIChunk(body)
     if type(chunk) ~= "function" then
-        hubWarn("WindUI compile failed:", tostring(compileErr))
-        return false
+        hubWarn("WindUI compile failed — using built-in UI:", tostring(compileErr))
+        return finishWithLib(createBuiltinWindUI())
     end
     local ok, lib = xpcall(chunk, function(err)
         if debug and debug.traceback then return debug.traceback(tostring(err), 2) end
         return tostring(err)
     end)
-    if not ok then
-        hubWarn("WindUI runtime error:", tostring(lib))
+    if not ok or type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then
+        hubWarn("WindUI runtime failed — using built-in UI:", tostring(lib))
         if delfile and isfile and isfile(WINDUI_CACHE) then pcall(delfile, WINDUI_CACHE) end
-        return false
-    end
-    if type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then
-        hubWarn("WindUI returned invalid library")
-        return false
+        return finishWithLib(createBuiltinWindUI())
     end
     WindUI = lib
     print("[NTMT HUB] WindUI loaded OK")
@@ -265,7 +609,7 @@ local LocalPlayer = Services.Players.LocalPlayer or Services.Players.PlayerAdded
 repeat task.wait() until game:IsLoaded()
 
 if not loadWindUI() then
-    hubWarn("Script stopped (WindUI failed). Read yellow warnings above.")
+    hubWarn("Script stopped — UI could not load.")
     return
 end
 
@@ -1751,7 +2095,7 @@ local Window = WindUI:CreateWindow({
     OpenButton = { Title = "NTMT HUB", Enabled = true, Draggable = true, Scale = 0.5 },
 })
 if type(Window.Tag) == "function" then
-    xpcall(function() Window:Tag({ Title = "v6.0.1", Icon = "github", Color = hexColor("#1c1c1c"), Border = true }) end, noopErr)
+    xpcall(function() Window:Tag({ Title = "v6.0", Icon = "github", Color = hexColor("#1c1c1c"), Border = true }) end, noopErr)
 end
 applyUITheme(selectedUITheme)
 
@@ -2069,6 +2413,14 @@ task.spawn(function()
 end)
 
 print("[NTMT HUB v6.0] Loaded | " .. Executor)
+
+pcall(function()
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "NTMT HUB",
+        Text = "Loaded! Tap NTMT HUB (left side)",
+        Duration = 6,
+    })
+end)
 
 end -- runMain
 
