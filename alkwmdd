@@ -767,7 +767,7 @@ UI_THEMES = {
     Yellow = { accent = "#eab308", bg = "#1a160a", btn = "#3d3415", text = "#fffbe6", toggle = "#eab308" },
     Purple = { accent = "#a855f7", bg = "#140a1a", btn = "#2a153d", text = "#f3e6ff", toggle = "#a855f7" },
 }
-COOLDOWN = { Harvest = 0.1, Plant = 0.1, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.12, Mail = 2, Water = 0.35 }
+COOLDOWN = { Harvest = 0.01, Plant = 0.01, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.015, Mail = 2, Water = 0.35 }
 PLANT_MIN_DIST = 3
 PLANT_CENTER_AVOID = 18
 PET_DEFEND_RADIUS = 22
@@ -2010,7 +2010,7 @@ HARVEST_BATCH = 1
 lastFiredCleanup = 0
 lastBestScan = 0
 cachedBestHarvest = nil
-BEST_SCAN_INTERVAL = 0.1
+BEST_SCAN_INTERVAL = 0.05
 lastEmptySpotScan = 0
 cachedEmptySpot = nil
 EMPTY_SPOT_CACHE_TTL = 0.2
@@ -3030,10 +3030,13 @@ function pickNextPlantSeed()
     return nil, nil
 end
 
-function equipTool(tool)
+function equipTool(tool, fast)
     if not tool then return end
     local hum = getHumanoid()
-    if hum and tool.Parent ~= LocalPlayer.Character then hum:EquipTool(tool) task.wait(0.12) end
+    if hum and tool.Parent ~= LocalPlayer.Character then
+        hum:EquipTool(tool)
+        if not fast then task.wait(0.12) end
+    end
 end
 
 function getSeedStock(name)
@@ -3427,27 +3430,21 @@ function tryBuyGearsFast()
 end
 
 function tryAutoPlant()
-    if not genv.ftgs_AutoPlant or plantingBusy or not setHasAny(selectedPlantSeeds) then return end
+    if not genv.ftgs_AutoPlant or not setHasAny(selectedPlantSeeds) then return end
     if os.clock() - lastPlant < COOLDOWN.Plant then return end
     if not isInGardenActionRange() then return end
     if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
     local seedName, tool = pickNextPlantSeed()
     if not tool then return end
-    local pos = scanGardenForEmptySpot()
+    local pos = scanGardenForEmptySpot(true)
     if not pos or not isPosInsidePlot(pos, 1) then return end
     lastPlant = os.clock()
-    plantingBusy = true
-    task.spawn(function()
-        if not genv.ftgs_AutoPlant then plantingBusy = false return end
-        equipTool(tool)
-        tool = findSeedToolByName(seedName) or tool
-        safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool)
-        if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
-        invalidateFarmCaches()
-        task.wait(0.01)
-        plantingBusy = false
-    end)
+    equipTool(tool, true)
+    tool = findSeedToolByName(seedName) or tool
+    safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool)
+    if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
+    invalidateFarmCaches()
 end
 
 function trySprinkler()
@@ -3949,8 +3946,11 @@ function tryBuyPet()
             or (pick.ref and pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true))
         local tameRemote = Net.Pets and Net.Pets.WildPetTame
         local function doTame()
-            if prompt then fireProximityPrompt(prompt) end
-            if tameRemote then safeNetCall(tameRemote, pick.ref) end
+            if prompt then fireProximityPromptFast(prompt) end
+            if tameRemote then
+                safeNetCall(tameRemote, pick.ref)
+                safeNetCall(tameRemote, pick.ref)
+            end
         end
         movementBypass = true
         gardenActionLock = true
@@ -3960,7 +3960,9 @@ function tryBuyPet()
         if tr and tr.OnClientEvent then
             conn = tr.OnClientEvent:Connect(function(_, uid) if uid == LocalPlayer.UserId then done = true end end)
         end
-        local deadline = os.clock() + 3.5
+        local startPos = getWildPetPosition(pick)
+        if startPos then tpInstant(startPos) stickToPosition(startPos) end
+        local deadline = os.clock() + 2.5
         while not done and os.clock() < deadline and genv.ftgs_AutoBuyPet do
             local pos = getWildPetPosition(pick)
             if pos then
@@ -3972,14 +3974,14 @@ function tryBuyPet()
                         local thrp = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
                         if thrp then
                             tpInstant(thrp.Position + (thrp.CFrame.LookVector * -4))
-                            sendAutoClick(10)
+                            sendAutoClick(4)
                         end
                     end
                     stickToPosition(pos)
                 end
             end
             doTame()
-            task.wait(0.008)
+            task.wait(0.003)
         end
         restoreAllHitboxes()
         activeDefendPetPos = nil
@@ -5952,7 +5954,7 @@ function safeLoop(fn)
     xpcall(fn, noopErr)
 end
 
--- Single harvest loop (0.1s) — Auto Harvest + Auto Harvest Best share one tick to avoid lag / model bugs
+-- Harvest loop: 0.01s = 1 collect per tick (Auto Harvest + Auto Harvest Best share one loop)
 task.spawn(function()
     while true do
         if genv.ftgs_AutoHarvest or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
@@ -6012,7 +6014,7 @@ hubLoop(function()
 end)
 
 hubLoop(function()
-    while true do if genv.ftgs_AutoBuyPet then safeLoop(tryBuyPet) end task.wait(0.08) end
+    while true do if genv.ftgs_AutoBuyPet then safeLoop(tryBuyPet) end task.wait(0.015) end
 end)
 
 hubLoop(function()
@@ -6032,7 +6034,7 @@ end)
 hubLoop(function()
     while true do
         if genv.ftgs_AutoPlant then safeLoop(tryAutoPlant) end
-        task.wait(genv.ftgs_AutoPlant and 0.05 or 0.35)
+        task.wait(genv.ftgs_AutoPlant and COOLDOWN.Plant or 0.35)
     end
 end)
 
