@@ -767,7 +767,7 @@ UI_THEMES = {
     Yellow = { accent = "#eab308", bg = "#1a160a", btn = "#3d3415", text = "#fffbe6", toggle = "#eab308" },
     Purple = { accent = "#a855f7", bg = "#140a1a", btn = "#2a153d", text = "#f3e6ff", toggle = "#a855f7" },
 }
-COOLDOWN = { Harvest = 0.007, Plant = 0.01, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.12, Mail = 2, Water = 0.35 }
+COOLDOWN = { Harvest = 0.1, Plant = 0.1, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.12, Mail = 2, Water = 0.35 }
 PLANT_MIN_DIST = 3
 PLANT_CENTER_AVOID = 18
 PET_DEFEND_RADIUS = 22
@@ -5952,7 +5952,7 @@ function safeLoop(fn)
     xpcall(fn, noopErr)
 end
 
--- Single harvest loop (0.007s) — Auto Harvest + Auto Harvest Best share one tick to avoid double lag
+-- Single harvest loop (0.1s) — Auto Harvest + Auto Harvest Best share one tick to avoid lag / model bugs
 task.spawn(function()
     while true do
         if genv.ftgs_AutoHarvest or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
