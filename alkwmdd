@@ -796,6 +796,8 @@ CONFIG_FILE = "ntmthub_gag2_config.json"
 movementBypass = false
 fakeLagThreadId = 0
 gardenActionLock = false
+gardenActionLockSince = 0
+GARDEN_LOCK_MAX = 10
 plantingBusy, sprinklerBusy, shovelBusy, stealBusy, dropsBusy, wateringBusy = false, false, false, false, false, false
 sprinkledSpots = {}
 sprinkledPlantKeys = {}
@@ -2005,6 +2007,25 @@ lastPlant, lastExpand, lastShovel, lastGear, lastPet, lastSellTry, lastMailTime 
 isSendingMail = false
 firedSet = {}
 HARVEST_BATCH = 1
+lastFiredCleanup = 0
+lastBestScan = 0
+cachedBestHarvest = nil
+BEST_SCAN_INTERVAL = 0.1
+lastEmptySpotScan = 0
+cachedEmptySpot = nil
+EMPTY_SPOT_CACHE_TTL = 0.2
+lastOccupiedScan = 0
+cachedOccupied = nil
+OCCUPIED_CACHE_TTL = 0.2
+
+function invalidateFarmCaches()
+    cachedBestHarvest = nil
+    lastBestScan = 0
+    cachedEmptySpot = nil
+    lastEmptySpotScan = 0
+    cachedOccupied = nil
+    lastOccupiedScan = 0
+end
 
 function saveConfig()
     if not writefile then return end
@@ -2177,25 +2198,34 @@ function hookGardenRemotes()
         local r = Net.Garden and Net.Garden[name]
         if r and r.OnClientEvent then xpcall(function() r.OnClientEvent:Connect(fn) end, noopErr) end
     end
-    hook("PlantAdded", function(uid, pid, data) if uid == myUserId then trackedPlants[pid] = data end end)
-    hook("PlantRemoved", function(uid, pid) if uid == myUserId then trackedPlants[pid] = nil end end)
+    hook("PlantAdded", function(uid, pid, data)
+        if uid == myUserId then trackedPlants[pid] = data invalidateFarmCaches() end
+    end)
+    hook("PlantRemoved", function(uid, pid)
+        if uid == myUserId then trackedPlants[pid] = nil invalidateFarmCaches() end
+    end)
     hook("FruitAdded", function(uid, pid, fruitId, data)
         if uid ~= myUserId then return end
         if not trackedPlants[pid] then trackedPlants[pid] = { Fruits = {} } end
         if not trackedPlants[pid].Fruits then trackedPlants[pid].Fruits = {} end
         trackedPlants[pid].Fruits[fruitId] = data
+        invalidateFarmCaches()
     end)
     hook("FruitRemoved", function(uid, pid, fruitId)
         if uid ~= myUserId then return end
         local p = trackedPlants[pid]
         if p and p.Fruits then p.Fruits[fruitId] = nil end
+        invalidateFarmCaches()
     end)
     local sync = Net.Garden and Net.Garden.SyncAllGardens
     if sync and sync.OnClientEvent then
         xpcall(function()
             sync.OnClientEvent:Connect(function(data)
                 for uid, info in pairs(data) do
-                    if (tonumber(uid) or uid) == myUserId and info.Plants then trackedPlants = info.Plants end
+                    if (tonumber(uid) or uid) == myUserId and info.Plants then
+                        trackedPlants = info.Plants
+                        invalidateFarmCaches()
+                    end
                 end
             end)
         end, noopErr)
@@ -3048,7 +3078,7 @@ end
 
 function getOccupiedPlantPositions()
     local positions = {}
-    refreshOwnerPlot()
+    if not OwnerPlot then refreshOwnerPlot() end
     local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
     if pf then
         for _, plant in pf:GetChildren() do
@@ -3063,13 +3093,29 @@ function getOccupiedPlantPositions()
     return positions
 end
 
-function scanGardenForEmptySpot()
-    refreshOwnerPlot()
+function getOccupiedPlantPositionsCached()
+    local now = os.clock()
+    if cachedOccupied and now - lastOccupiedScan < OCCUPIED_CACHE_TTL then
+        return cachedOccupied
+    end
+    cachedOccupied = getOccupiedPlantPositions()
+    lastOccupiedScan = now
+    return cachedOccupied
+end
+
+function scanGardenForEmptySpot(force)
+    local now = os.clock()
+    if not force and cachedEmptySpot and now - lastEmptySpotScan < EMPTY_SPOT_CACHE_TTL then
+        return cachedEmptySpot
+    end
+    if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return nil end
-    cachePlantPositions(OwnerPlot)
-    refreshPlantAreas()
+    if #plantAreas == 0 then
+        cachePlantPositions(OwnerPlot)
+        refreshPlantAreas()
+    end
     if #plantAreas == 0 then return nil end
-    local occupied = getOccupiedPlantPositions()
+    local occupied = getOccupiedPlantPositionsCached()
     local best, bestScore
     for _, pos in plantAreas do
         if not isPosInsidePlot(pos, 2) then continue end
@@ -3077,6 +3123,8 @@ function scanGardenForEmptySpot()
         local edge = savedPlotCenter and flatDistXZ(pos, savedPlotCenter) or 0
         if not best or edge > bestScore then best, bestScore = pos, edge end
     end
+    cachedEmptySpot = best
+    lastEmptySpotScan = now
     return best
 end
 
@@ -3228,28 +3276,7 @@ function isPhysicalFruitRipe(fruit, plant)
 end
 
 function findBestHarvestableInGarden()
-    refreshOwnerPlot()
     local best
-    local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
-    if pf then
-        for _, plant in pf:GetChildren() do
-            local fruits = plant:FindFirstChild("Fruits")
-            local scan = fruits and fruits:GetChildren() or { plant }
-            for _, fr in scan do
-                if isPhysicalFruitRipe(fr, plant) then
-                    local val = calculateStealValue(fr)
-                    if not best or val > best.value then
-                        best = {
-                            fruit = fr,
-                            plantId = plant:GetAttribute("PlantId") or plant:GetAttribute("PlantID") or plant.Name,
-                            fruitId = fr:GetAttribute("FruitId") or fr:GetAttribute("FruitID") or fr.Name,
-                            value = val,
-                        }
-                    end
-                end
-            end
-        end
-    end
     for plantId, plantData in pairs(trackedPlants) do
         if type(plantData) ~= "table" then continue end
         local fruits = plantData.Fruits
@@ -3268,53 +3295,93 @@ function findBestHarvestableInGarden()
                     )
                     if ok then val = v or 0 end
                     if not best or val > best.value then
-                        best = { plantId = plantId, fruitId = fruitId, value = val, replica = true }
+                        best = { plantId = plantId, fruitId = fruitId, value = val }
                     end
                 end
+            end
+        end
+        if isDataReady(plantData) and shouldHarvestTarget(plantData, nil) then
+            local val = 0
+            local ok, v = xpcall(
+                FruitValueCalc,
+                noopErr,
+                getPlantSeedName(plantData),
+                plantData.SizeMulti or plantData.Age,
+                plantData.Mutation,
+                LocalPlayer,
+                1
+            )
+            if ok then val = v or 0 end
+            if not best or val > best.value then
+                best = { plantId = plantId, fruitId = "", value = val }
             end
         end
     end
     return best
 end
 
-function tryHarvestBestOnce()
-    if not genv.ftgs_AutoHarvestBest then return end
-    local best = findBestHarvestableInGarden()
-    if not best then return end
-    safeNetCall(Net.Garden and Net.Garden.CollectFruit, best.plantId, best.fruitId or "")
-end
-
-function tryHarvestOne()
-    if not genv.ftgs_AutoHarvest then return end
-    local n = 0
-    local now = os.clock()
-    for plantId, plantData in pairs(trackedPlants) do
-        if type(plantData) ~= "table" then continue end
-        local fruits = plantData.Fruits
-        if type(fruits) == "table" then
-            for fruitId, fruitData in pairs(fruits) do
-                if isDataReady(fruitData) and shouldHarvestTarget(plantData, fruitData) then
-                    local key = tostring(plantId) .. "|" .. tostring(fruitId)
-                    if not firedSet[key] and n < HARVEST_BATCH then
-                        safeNetCall(Net.Garden and Net.Garden.CollectFruit, plantId, fruitId)
-                        firedSet[key] = now
-                        n += 1
-                    end
-                end
-            end
-        end
-        if isDataReady(plantData) and shouldHarvestTarget(plantData, nil) then
-            local key = tostring(plantId) .. "|_plant"
-            if not firedSet[key] and n < HARVEST_BATCH then
-                safeNetCall(Net.Garden and Net.Garden.CollectFruit, plantId, "")
-                firedSet[key] = now
-                n += 1
-            end
-        end
-    end
+function cleanupFiredSetIfNeeded(now)
+    now = now or os.clock()
+    if now - lastFiredCleanup < 5 then return end
+    lastFiredCleanup = now
     for key, time in pairs(firedSet) do
         if now - time > 30 then firedSet[key] = nil end
     end
+end
+
+function tryHarvestTick()
+    if not genv.ftgs_AutoHarvest and not genv.ftgs_AutoHarvestBest then return end
+    local now = os.clock()
+    local n = 0
+
+    if genv.ftgs_AutoHarvestBest then
+        if now - lastBestScan >= BEST_SCAN_INTERVAL then
+            lastBestScan = now
+            cachedBestHarvest = findBestHarvestableInGarden()
+        end
+        local best = cachedBestHarvest
+        if best then
+            local key = tostring(best.plantId) .. "|" .. tostring(best.fruitId ~= "" and best.fruitId or "_plant")
+            if not firedSet[key] then
+                safeNetCall(Net.Garden and Net.Garden.CollectFruit, best.plantId, best.fruitId or "")
+                firedSet[key] = now
+                cachedBestHarvest = nil
+                cleanupFiredSetIfNeeded(now)
+                return
+            end
+        end
+    end
+
+    if genv.ftgs_AutoHarvest then
+        for plantId, plantData in pairs(trackedPlants) do
+            if type(plantData) ~= "table" then continue end
+            local fruits = plantData.Fruits
+            if type(fruits) == "table" then
+                for fruitId, fruitData in pairs(fruits) do
+                    if isDataReady(fruitData) and shouldHarvestTarget(plantData, fruitData) then
+                        local key = tostring(plantId) .. "|" .. tostring(fruitId)
+                        if not firedSet[key] and n < HARVEST_BATCH then
+                            safeNetCall(Net.Garden and Net.Garden.CollectFruit, plantId, fruitId)
+                            firedSet[key] = now
+                            n += 1
+                        end
+                    end
+                end
+            end
+            if n >= HARVEST_BATCH then break end
+            if isDataReady(plantData) and shouldHarvestTarget(plantData, nil) then
+                local key = tostring(plantId) .. "|_plant"
+                if not firedSet[key] and n < HARVEST_BATCH then
+                    safeNetCall(Net.Garden and Net.Garden.CollectFruit, plantId, "")
+                    firedSet[key] = now
+                    n += 1
+                end
+            end
+            if n >= HARVEST_BATCH then break end
+        end
+    end
+
+    cleanupFiredSetIfNeeded(now)
 end
 
 function tryBuySeedsFast()
@@ -3363,7 +3430,7 @@ function tryAutoPlant()
     if not genv.ftgs_AutoPlant or plantingBusy or not setHasAny(selectedPlantSeeds) then return end
     if os.clock() - lastPlant < COOLDOWN.Plant then return end
     if not isInGardenActionRange() then return end
-    refreshOwnerPlot()
+    if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
     local seedName, tool = pickNextPlantSeed()
     if not tool then return end
@@ -3377,6 +3444,7 @@ function tryAutoPlant()
         tool = findSeedToolByName(seedName) or tool
         safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool)
         if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
+        invalidateFarmCaches()
         task.wait(0.01)
         plantingBusy = false
     end)
@@ -4930,6 +4998,17 @@ end
 
 function applyMovementBypass(dt)
     if not genv.ftgs_BypassMovement then return end
+    if gardenActionLock then
+        if gardenActionLockSince <= 0 then gardenActionLockSince = os.clock() end
+        if not stealBusy and not isCatchingPet and not collectingMutation and not sprinklerBusy and not wateringBusy
+            and os.clock() - gardenActionLockSince > GARDEN_LOCK_MAX then
+            gardenActionLock = false
+            movementBypass = false
+            gardenActionLockSince = 0
+        end
+    else
+        gardenActionLockSince = 0
+    end
     if genv.ftgs_FakeLag or movementBypass or gardenActionLock or isCatchingPet or stealBusy or collectingMutation then return end
     local hum = getHumanoid()
     local hrp = getRoot()
@@ -5873,13 +5952,12 @@ function safeLoop(fn)
     xpcall(fn, noopErr)
 end
 
--- Harvest loops run immediately (no key wait) so farm always works when toggled on
+-- Single harvest loop (0.007s) — Auto Harvest + Auto Harvest Best share one tick to avoid double lag
 task.spawn(function()
-    while true do if genv.ftgs_AutoHarvest then safeLoop(tryHarvestOne) end task.wait(COOLDOWN.Harvest) end
-end)
-
-task.spawn(function()
-    while true do if genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestBestOnce) end task.wait(COOLDOWN.Harvest) end
+    while true do
+        if genv.ftgs_AutoHarvest or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
+        task.wait(COOLDOWN.Harvest)
+    end
 end)
 
 hubLoop(function()
@@ -5954,7 +6032,7 @@ end)
 hubLoop(function()
     while true do
         if genv.ftgs_AutoPlant then safeLoop(tryAutoPlant) end
-        task.wait(genv.ftgs_AutoPlant and 0.01 or 0.35)
+        task.wait(genv.ftgs_AutoPlant and 0.05 or 0.35)
     end
 end)
 
