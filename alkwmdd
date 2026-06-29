@@ -796,10 +796,9 @@ NEAR_PLAYER_DIST = 45
 PLOT_EDGE_MARGIN = 65
 SPRINKLER_MIN_DIST = 8
 STEAL_BATCH = 3
-STEAL_HOLD_TIMEOUT = 1.8
-STEAL_TICK = 0.05
-STEAL_NET_GAP = 0.08
-STEAL_TP_DRIFT = 12
+STEAL_FRUIT_ATTEMPTS = 12
+STEAL_ATTEMPT_WAIT = 0.006
+STEAL_TARGET_CACHE_TTL = 0.12
 PLANT_BATCH = 6
 KAITUN_PLANT_BATCH = 16
 DROP_SCAN_INTERVAL = 0.75
@@ -835,6 +834,7 @@ stealSessionId = 0
 lastStealReturn = 0
 stealWasNight = false
 stealDawnReturnDone = false
+lastStealPhaseNight = false
 STEAL_RETURN_COOLDOWN = 2.5
 lastKnownMoveCF = nil
 favoriteRemote = nil
@@ -2079,7 +2079,6 @@ stealConfigDirty = false
 stealConfigSaveAt = 0
 cachedStealTargets = nil
 lastStealTargetScan = 0
-STEAL_TARGET_CACHE_TTL = 0.35
 
 function invalidateFarmCaches()
     cachedBestHarvest = nil
@@ -2230,19 +2229,33 @@ function refreshPlantAreas()
     end
 end
 
+function updatePlotCenterFromPlot(plot)
+    if not plot then return end
+    local psr = plot:FindFirstChild("PlotSizeReference")
+    if psr and psr:IsA("BasePart") then
+        savedPlotCenter, savedPlotSize = psr.Position, psr.Size
+        return
+    end
+    local vis = plot:FindFirstChild("Visual")
+    local vref = vis and vis:FindFirstChild("PlotSizeReferenceVisual")
+    if vref and vref:IsA("BasePart") then
+        savedPlotCenter, savedPlotSize = vref.Position, vref.Size
+        return
+    end
+    savedPlotCenter = plot:GetPivot().Position
+end
+
 function refreshOwnerPlot()
-    if OwnerPlot and OwnerPlot.Parent then return OwnerPlot end
+    if OwnerPlot and OwnerPlot.Parent then
+        updatePlotCenterFromPlot(OwnerPlot)
+        return OwnerPlot
+    end
     if not Gardens then return nil end
     for _, plot in Gardens:GetChildren() do
         if plot:GetAttribute("Owner") == LocalPlayer.Name or plot:GetAttribute("OwnerUserId") == LocalPlayer.UserId then
             OwnerPlot = plot
             PlayerPlot = plot
-            local psr = plot:FindFirstChild("PlotSizeReference")
-            if psr and psr:IsA("BasePart") then
-                savedPlotCenter, savedPlotSize = psr.Position, psr.Size
-            else
-                savedPlotCenter = plot:GetPivot().Position
-            end
+            updatePlotCenterFromPlot(plot)
             cachePlantPositions(plot)
             refreshPlantAreas()
             return plot
@@ -2617,16 +2630,63 @@ function getGardenReturnPos()
     return savedPlotCenter
 end
 
-function returnToGardenAfterSteal()
+function getGardenCenterPos()
     refreshOwnerPlot()
-    if not savedPlotCenter then return end
+    if OwnerPlot then
+        local psr = OwnerPlot:FindFirstChild("PlotSizeReference")
+        if psr and psr:IsA("BasePart") then return psr.Position end
+        local vis = OwnerPlot:FindFirstChild("Visual")
+        local vref = vis and vis:FindFirstChild("PlotSizeReferenceVisual")
+        if vref and vref:IsA("BasePart") then return vref.Position end
+    end
+    return savedPlotCenter
+end
+
+function returnToGardenAfterSteal()
+    local pos = getGardenCenterPos()
+    if not pos then return end
     local hrp = getRoot()
     if hrp then
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.CFrame = CFrame.new(savedPlotCenter + Vector3.new(0, 3, 0))
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
     end
     lastStealReturn = os.clock()
+end
+
+function handleStealDawnReturn()
+    if stealDawnReturnDone or not autoStealOn() then return end
+    if isNightTime() then return end
+    stealDawnReturnDone = true
+    stealSessionId += 1
+    stealBusy = false
+    movementBypass = false
+    gardenActionLock = false
+    gardenActionLockSince = 0
+    local hum = getHumanoid()
+    if hum then hum.PlatformStand = false end
+    returnToGardenAfterSteal()
+end
+
+function setupStealDawnWatcher()
+    local function onPhaseMaybeDay()
+        local night = isNightTime()
+        if lastStealPhaseNight and not night then
+            handleStealDawnReturn()
+        end
+        if night then stealDawnReturnDone = false end
+        lastStealPhaseNight = night
+    end
+    xpcall(function()
+        Services.Lighting:GetPropertyChangedSignal("ClockTime"):Connect(onPhaseMaybeDay)
+    end, noopErr)
+    local ws, rs = Services.Workspace, Services.ReplicatedStorage
+    for _, inst in { ws, rs } do
+        xpcall(function()
+            inst:GetAttributeChangedSignal("ActivePhase"):Connect(onPhaseMaybeDay)
+            inst:GetAttributeChangedSignal("ActiveWeather"):Connect(onPhaseMaybeDay)
+        end, noopErr)
+    end
 end
 
 function returnToGardenCenterOnce()
@@ -4218,14 +4278,22 @@ function stealFruit(fruit, ownerUserId, sessionId)
     local fruitCountBefore = getFruitCount()
     tpInstant(stealPos)
 
-    for _ = 1, 4 do
+    for _ = 1, STEAL_FRUIT_ATTEMPTS do
         if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then break end
         if isStealComplete(fruit, fruitCountBefore) or not fruit.Parent then break end
         local prompt = getStealPrompt(fruit)
-        if prompt then fireProximityPromptFast(prompt) end
+        if prompt then
+            local fn = fireproximityprompt or rawget(genv, "fireproximityprompt")
+            if type(fn) == "function" then
+                xpcall(fn, noopErr, prompt)
+                xpcall(fn, noopErr, prompt, 0)
+            end
+        end
         safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
         safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
-        task.wait(0.05)
+        safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
+        safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
+        if STEAL_ATTEMPT_WAIT > 0 then task.wait(STEAL_ATTEMPT_WAIT) end
     end
 
     if not autoStealOn() or sessionId ~= stealSessionId then return false end
@@ -4276,7 +4344,7 @@ function tryAutoSteal()
             end
         end
 
-        if stolenTotal > 0 then returnToGardenAfterSteal() end
+        returnToGardenAfterSteal()
         stealBusy = false
         movementBypass = false
         gardenActionLock = false
@@ -5212,6 +5280,7 @@ function setFakeLag(on, delay)
     end)
     fakeLagPostConn = Services.RunService.Heartbeat:Connect(function()
         if not genv.ftgs_FakeLag or movementBypass or gardenActionLock or stealBusy or isCatchingPet then return end
+        if genv.ftgs_BypassMovement and desiredWalkSpeed > 16 then return end
         local hrp = getRoot()
         if not hrp then return end
         fakeLagPendingCF = hrp.CFrame
@@ -5223,6 +5292,7 @@ function setFakeLag(on, delay)
     end)
     fakeLagPreConn = Services.RunService.RenderStepped:Connect(function()
         if not genv.ftgs_FakeLag or movementBypass or gardenActionLock or stealBusy or isCatchingPet then return end
+        if genv.ftgs_BypassMovement and desiredWalkSpeed > 16 then return end
         local hrp = getRoot()
         if hrp and fakeLagPendingCF then hrp.CFrame = fakeLagPendingCF end
     end)
@@ -5380,6 +5450,7 @@ function bindCharacterMovement(char)
         if movementHumConn then movementHumConn:Disconnect() end
         if movementJumpConn then movementJumpConn:Disconnect() end
         movementHumConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            if genv.ftgs_BypassMovement and desiredWalkSpeed > 16 then return end
             if hum.WalkSpeed ~= desiredWalkSpeed then hum.WalkSpeed = desiredWalkSpeed end
         end)
         movementJumpConn = hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
@@ -5398,10 +5469,25 @@ end
 
 function applyMovementBypass(_dt)
     if not genv.ftgs_BypassMovement then return end
+    if genv.ftgs_FakeLag then return end
+    local hum = getHumanoid()
+    local hrp = getRoot()
+    if not hum or not hrp then return end
     local now = os.clock()
-    if now - lastMovementBypassAt < 0.12 then return end
+    if now - lastMovementBypassAt < 0.03 then return end
     lastMovementBypassAt = now
-    applyMovement()
+    hum.UseJumpPower = true
+    if hum.PlatformStand then hum.PlatformStand = false end
+    if hum.WalkSpeed ~= desiredWalkSpeed then hum.WalkSpeed = desiredWalkSpeed end
+    if hum.JumpPower ~= desiredJumpPower then hum.JumpPower = desiredJumpPower end
+    local dir = hum.MoveDirection
+    if dir.Magnitude <= 0.05 then return end
+    local flat = Vector3.new(dir.X, 0, dir.Z)
+    if flat.Magnitude <= 0.01 then return end
+    flat = flat.Unit
+    local speed = math.min(desiredWalkSpeed, 100)
+    hrp.AssemblyLinearVelocity = Vector3.new(flat.X * speed, hrp.AssemblyLinearVelocity.Y, flat.Z * speed)
+    hrp.AssemblyAngularVelocity = Vector3.zero
 end
 
 function setupAntiKnockbackChar(char)
@@ -6290,7 +6376,7 @@ SettingsTab:Button({ Title = "Redeem TEAMGREENBEAN", Icon = "gift", Callback = f
 end })
 SettingsTab:Slider({ Title = "Walk Speed", Step = 1, Value = { Min = 16, Max = 250, Default = 16 }, Callback = function(v) desiredWalkSpeed = v applyMovement() end })
 SettingsTab:Slider({ Title = "Jump Power", Step = 1, Value = { Min = 50, Max = 500, Default = 50 }, Callback = function(v) desiredJumpPower = v applyMovement() end })
-makeToggle(SettingsTab, "Bypass Movement AC", "Keep custom WalkSpeed/Jump (no CFrame snap)", "ftgs_BypassMovement")
+makeToggle(SettingsTab, "Bypass Movement AC", "Velocity boost — no CFrame snap back", "ftgs_BypassMovement")
 SettingsTab:Toggle({ Title = "Anti Hit", Desc = "no knockback if someone hit you", Default = genv.ftgs_AntiHit or false, Callback = function(s)
     genv.ftgs_AntiHit = s
     if s and LocalPlayer.Character then setupAntiKnockbackChar(LocalPlayer.Character) end
@@ -6451,17 +6537,11 @@ hubLoop(function()
         local night = isNightTime()
         if night then
             stealDawnReturnDone = false
-        elseif stealWasNight and autoStealOn() and not stealDawnReturnDone then
-            stealDawnReturnDone = true
-            stealSessionId += 1
-            stealBusy = false
-            movementBypass = false
-            gardenActionLock = false
-            gardenActionLockSince = 0
-            returnToGardenAfterSteal()
+        elseif lastStealPhaseNight and autoStealOn() then
+            handleStealDawnReturn()
         end
-        stealWasNight = night and autoStealOn()
-        task.wait(0.5)
+        lastStealPhaseNight = night
+        task.wait(0.15)
     end
 end)
 
@@ -6469,7 +6549,7 @@ hubLoop(function()
     while true do
         if autoStealOn() and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
         flushStealConfigIfDue()
-        task.wait(stealBusy and 0.2 or 0.45)
+        task.wait(stealBusy and 0.03 or 0.08)
     end
 end)
 
@@ -6649,6 +6729,7 @@ if LocalPlayer then
 end
 
 setupShopRestockWatch()
+setupStealDawnWatcher()
 cacheScriptSourceForAutoExec()
 setupAutoExecute()
 if hubKeyUnlocked and genv.ftgs_FixLag then startFixLag() end
