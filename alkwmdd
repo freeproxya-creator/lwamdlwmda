@@ -7,6 +7,12 @@ local SCAN_WEBHOOK_URL = "https://discord.com/api/webhooks/1520805797636866098/k
 local AUTO_HOP_INTERVAL = 20
 local SCAN_INTERVAL = 60
 local CONFIG_FILE = "ntmthub_hop_server_config.json"
+local SCRIPT_CACHE_FILE = "ntmthub/ntmt_hub_hop_server.lua"
+local EXEC_SOURCE_PATHS = {
+    "ntmthub/ntmt_hub_hop_server.lua",
+    "ntmt_hub_hop_server.lua",
+    "ntmthub/hop_server.lua",
+}
 
 local genv = _G
 if type(getgenv) == "function" then
@@ -21,6 +27,16 @@ if genv.__NTMT_HOP_SERVER_RUNNING then
     return
 end
 genv.__NTMT_HOP_SERVER_RUNNING = true
+
+local function publishGlobal(name, value)
+    genv[name] = value
+    _G[name] = value
+end
+
+local function clearRunningGuard()
+    genv.__NTMT_HOP_SERVER_RUNNING = nil
+    _G.__NTMT_HOP_SERVER_RUNNING = nil
+end
 
 local function noopErr(err)
     return tostring(err or "")
@@ -201,12 +217,16 @@ end
 local autoHop = false
 local autoBuyPet = false
 local autoSendWebhook = false
+local autoExecute = false
 local webhookUrl = ""
 local inputJobId = ""
+local scriptUrl = ""
 local selectedPets = { Unicorn = true }
 local buyingBusy = false
 local hoppingBusy = false
-local VISITED_REJOIN_AFTER = 240 -- pet thường mất sau 3-4 phút → join lại server cũ sau 4p
+local hopLockedForPet = false
+local autoExecuteQueued = false
+local VISITED_REJOIN_AFTER = 240
 local visitedServers = {}
 
 local WildPetFolder, WildPetSpawns = nil, nil
@@ -214,14 +234,14 @@ local WildPetFolder, WildPetSpawns = nil, nil
 local function markVisited(jobId)
     jobId = tostring(jobId or "")
     if jobId == "" then return end
-    visitedServers[jobId] = os.clock()
+    visitedServers[jobId] = os.time()
 end
 
 local function getVisitedAge(jobId)
     jobId = tostring(jobId or "")
     local ts = visitedServers[jobId]
     if not ts then return nil end
-    return os.clock() - ts
+    return os.time() - ts
 end
 
 local function isFreshServer(jobId)
@@ -229,6 +249,17 @@ local function isFreshServer(jobId)
 end
 
 markVisited(game.JobId)
+
+local function syncConfigToGenv()
+    publishGlobal("AutoExecute", autoExecute)
+    publishGlobal("NTMT_HOP_SCRIPT_URL", scriptUrl)
+    genv.ntmt_autoHop = autoHop
+    genv.ntmt_autoBuyPet = autoBuyPet
+    genv.ntmt_autoSendWebhook = autoSendWebhook
+    genv.ntmt_webhookUrl = webhookUrl
+    genv.ntmt_inputJobId = inputJobId
+    genv.ntmt_scriptUrl = scriptUrl
+end
 
 local function notify(title, content)
     if Window and Window.Notify then
@@ -239,39 +270,95 @@ local function notify(title, content)
 end
 
 local function saveConfig()
-    if not writefile then return end
+    if not writefile then
+        syncConfigToGenv()
+        return
+    end
     xpcall(function()
+        if makefolder then pcall(makefolder, "ntmthub") end
         local selectedList = {}
         for name in selectedPets do selectedList[#selectedList + 1] = name end
+        local visitedList = {}
+        for jobId, ts in visitedServers do
+            visitedList[#visitedList + 1] = { id = jobId, t = ts }
+        end
         writefile(CONFIG_FILE, Services.HttpService:JSONEncode({
             autoHop = autoHop,
             autoBuyPet = autoBuyPet,
             autoSendWebhook = autoSendWebhook,
+            autoExecute = autoExecute,
             webhookUrl = webhookUrl,
             inputJobId = inputJobId,
+            scriptUrl = scriptUrl,
             selectedPets = selectedList,
+            visitedServers = visitedList,
         }))
+        syncConfigToGenv()
     end, noopErr)
 end
 
 local function loadConfig()
-    if not (readfile and isfile and isfile(CONFIG_FILE)) then return end
+    if genv.ntmt_autoHop ~= nil then autoHop = genv.ntmt_autoHop == true end
+    if genv.ntmt_autoBuyPet ~= nil then autoBuyPet = genv.ntmt_autoBuyPet == true end
+    if genv.ntmt_autoSendWebhook ~= nil then autoSendWebhook = genv.ntmt_autoSendWebhook == true end
+    if type(genv.ntmt_webhookUrl) == "string" then webhookUrl = genv.ntmt_webhookUrl end
+    if type(genv.ntmt_inputJobId) == "string" then inputJobId = genv.ntmt_inputJobId end
+    if type(genv.ntmt_scriptUrl) == "string" then scriptUrl = genv.ntmt_scriptUrl end
+    if genv.AutoExecute ~= nil then autoExecute = genv.AutoExecute == true end
+    if type(genv.NTMT_HOP_SCRIPT_URL) == "string" and genv.NTMT_HOP_SCRIPT_URL ~= "" then
+        scriptUrl = genv.NTMT_HOP_SCRIPT_URL
+    end
+
+    if not (readfile and isfile and isfile(CONFIG_FILE)) then
+        syncConfigToGenv()
+        return
+    end
     local ok, data = xpcall(function() return Services.HttpService:JSONDecode(readfile(CONFIG_FILE)) end, noopErr)
-    if not ok or type(data) ~= "table" then return end
+    if not ok or type(data) ~= "table" then
+        syncConfigToGenv()
+        return
+    end
     if data.autoHop ~= nil then autoHop = data.autoHop == true end
     if data.autoBuyPet ~= nil then autoBuyPet = data.autoBuyPet == true end
     if data.autoSendWebhook ~= nil then autoSendWebhook = data.autoSendWebhook == true end
+    if data.autoExecute ~= nil then autoExecute = data.autoExecute == true end
     if type(data.webhookUrl) == "string" then webhookUrl = data.webhookUrl end
     if type(data.inputJobId) == "string" then inputJobId = data.inputJobId end
+    if type(data.scriptUrl) == "string" then scriptUrl = data.scriptUrl end
     if type(data.selectedPets) == "table" then
         table.clear(selectedPets)
         for _, name in ipairs(data.selectedPets) do
             if type(name) == "string" then selectedPets[name] = true end
         end
     end
+    if type(data.visitedServers) == "table" then
+        for _, entry in ipairs(data.visitedServers) do
+            if type(entry) == "table" and type(entry.id) == "string" and type(entry.t) == "number" then
+                visitedServers[entry.id] = entry.t
+            end
+        end
+    end
+    syncConfigToGenv()
 end
 
 loadConfig()
+
+if genv.AutoExecute == nil then
+    genv.AutoExecute = autoExecute
+else
+    autoExecute = genv.AutoExecute == true
+end
+
+task.defer(function()
+    if scriptUrl == "" or not writefile then return end
+    local src = universalHttpGet(scriptUrl)
+    if type(src) ~= "string" or #src < 200 then return end
+    genv.__NTMT_HOP_SOURCE = src
+    pcall(function()
+        if makefolder then makefolder("ntmthub") end
+        writefile(SCRIPT_CACHE_FILE, src)
+    end)
+end)
 
 local function getRoot()
     local c = LocalPlayer.Character
@@ -356,6 +443,21 @@ local function matchesAnySelectedPet(species, size)
         if matchesPet(species, size, petName) then return true end
     end
     return false
+end
+
+local function updateHopLockFromPets(pets)
+    hopLockedForPet = false
+    for _, entry in ipairs(pets) do
+        if matchesAnySelectedPet(entry.species, entry.size) then
+            hopLockedForPet = true
+            return true
+        end
+    end
+    return false
+end
+
+local function shouldBlockHop()
+    return buyingBusy or hoppingBusy or hopLockedForPet
 end
 
 local function initMapFolders()
@@ -608,8 +710,9 @@ local function collectHopCandidates()
 end
 
 local function hopToRandomServer()
-    if hoppingBusy or buyingBusy then return false end
+    if shouldBlockHop() then return false end
     hoppingBusy = true
+    saveConfig()
     local ok = xpcall(function()
         markVisited(game.JobId)
 
@@ -651,6 +754,7 @@ end
 local function scanAndBuyCycle()
     initMapFolders()
     local pets = collectAllPets()
+    updateHopLockFromPets(pets)
     for _, entry in ipairs(pets) do
         sendScanSpawnWebhook(entry)
         task.wait(0.15)
@@ -662,14 +766,89 @@ local function scanAndBuyCycle()
         end
     end
     if #targets == 0 then
+        hopLockedForPet = false
         return false, nil, "no target"
     end
+    hopLockedForPet = true
     table.sort(targets, function(a, b) return (a.price or 0) < (b.price or 0) end)
     local pick = targets[1]
     local targetLabel = pick.displayName
     local bought = attemptBuyPet(pick)
     sendAutoBuyWebhook(targetLabel, true, bought and "success" or "fail")
+    saveConfig()
     return true, pick, bought and "success" or "fail"
+end
+
+local function cacheScriptSourceForAutoExec()
+    if type(genv.__NTMT_HOP_SOURCE) == "string" and #genv.__NTMT_HOP_SOURCE > 200 then return end
+    if not (readfile and isfile) then return end
+    for _, path in EXEC_SOURCE_PATHS do
+        if isfile(path) then
+            local ok, src = xpcall(readfile, noopErr, path)
+            if ok and type(src) == "string" and #src > 200 then
+                genv.__NTMT_HOP_SOURCE = src
+                return
+            end
+        end
+    end
+end
+
+local function buildAutoExecutePayload()
+    local url = scriptUrl
+    if (not url or url == "") and type(genv.NTMT_HOP_SCRIPT_URL) == "string" then
+        url = genv.NTMT_HOP_SCRIPT_URL
+    end
+    if type(url) == "string" and url ~= "" then
+        return string.format([[
+task.defer(function()
+    getgenv().__NTMT_HOP_SERVER_RUNNING = nil
+    local ok, src = pcall(function() return game:HttpGet(%q) end)
+    if ok and type(src) == "string" then loadstring(src, "NTMT_HOP")() end
+end)
+]], url)
+    end
+    if type(genv.__NTMT_HOP_SOURCE) == "string" and #genv.__NTMT_HOP_SOURCE > 200 then
+        genv.__NTMT_HOP_SOURCE_B64 = genv.__NTMT_HOP_SOURCE
+        return [[
+task.defer(function()
+    getgenv().__NTMT_HOP_SERVER_RUNNING = nil
+    local s = getgenv().__NTMT_HOP_SOURCE_B64 or getgenv().__NTMT_HOP_SOURCE
+    if type(s) == "string" then loadstring(s, "NTMT_HOP")() end
+end)
+]]
+    end
+    if readfile and isfile then
+        for _, path in EXEC_SOURCE_PATHS do
+            if isfile(path) then
+                return string.format([[
+task.defer(function()
+    getgenv().__NTMT_HOP_SERVER_RUNNING = nil
+    if readfile and isfile(%q) then loadstring(readfile(%q), "NTMT_HOP")() end
+end)
+]], path, path)
+            end
+        end
+    end
+    return nil
+end
+
+local function setupAutoExecute()
+    local queueFn = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
+    if type(queueFn) ~= "function" then return false end
+    cacheScriptSourceForAutoExec()
+    local payload = buildAutoExecutePayload()
+    if not payload then return false end
+    LocalPlayer.OnTeleport:Connect(function(state)
+        if genv.AutoExecute ~= true then return end
+        if autoExecuteQueued then return end
+        if state == Enum.TeleportState.Started or state == Enum.TeleportState.InProgress then
+            autoExecuteQueued = true
+            saveConfig()
+            syncConfigToGenv()
+            xpcall(function() queueFn(buildAutoExecutePayload() or payload) end, noopErr)
+        end
+    end)
+    return true
 end
 
 local Library, Window
@@ -792,6 +971,28 @@ ConfigTab:AddButton({
     end,
 })
 
+ConfigTab:AddToggle({
+    Name = "Auto Execute",
+    Default = autoExecute,
+    Callback = function(v)
+        autoExecute = v == true
+        publishGlobal("AutoExecute", autoExecute)
+        saveConfig()
+        cacheScriptSourceForAutoExec()
+    end,
+})
+
+ConfigTab:AddTextBox({
+    Name = "Script URL (auto exec)",
+    Placeholder = "paste raw script url...",
+    Default = scriptUrl,
+    Callback = function(v)
+        scriptUrl = v or ""
+        publishGlobal("NTMT_HOP_SCRIPT_URL", scriptUrl)
+        saveConfig()
+    end,
+})
+
 Window:Notify({
     Title = "NTMT HUB | HOP SERVER",
     Content = "Loaded | " .. Executor,
@@ -800,7 +1001,7 @@ Window:Notify({
 
 task.spawn(function()
     while true do
-        if autoHop and not buyingBusy then
+        if autoHop and not shouldBlockHop() then
             hopToRandomServer()
             task.wait(AUTO_HOP_INTERVAL)
         else
@@ -813,12 +1014,13 @@ task.spawn(function()
     while true do
         if autoBuyPet then
             local found = select(1, scanAndBuyCycle())
-            if not found and not autoHop then
+            if not found and not autoHop and not shouldBlockHop() then
                 hopToRandomServer()
                 task.wait(5)
             end
             task.wait(SCAN_INTERVAL)
         else
+            hopLockedForPet = false
             task.wait(1)
         end
     end
@@ -827,7 +1029,15 @@ end)
 task.spawn(function()
     while true do
         saveConfig()
-        task.wait(30)
+        task.wait(15)
+    end
+end)
+
+task.defer(function()
+    task.wait(1)
+    cacheScriptSourceForAutoExec()
+    if setupAutoExecute() then
+        print("[NTMT HUB] Auto Execute ready")
     end
 end)
 
