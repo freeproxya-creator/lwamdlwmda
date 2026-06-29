@@ -1988,8 +1988,7 @@ TRANSLATE_LANG_CODES = {
 }
 
 selectedBuySeeds, selectedBuyGears = {}, {}
-selectedPlantSeeds, selectedShovelRarities, selectedSprinklers, selectedPets = { Carrot = true }, { Common = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
-kaitunPlantRarities, kaitunPetRarities = {}, {}
+selectedPlantSeeds, selectedShovelSeeds, selectedSprinklers, selectedPets = { Carrot = true }, { Carrot = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
 mailUsername, mailSeedName, mailGearName = "", "Carrot", GearNames[1] or ""
 mailSeedAmount, mailGearAmount, mailMessage = 1, 0, "NTMT HUB"
 selectedFindPet = "Unicorn"
@@ -2555,9 +2554,19 @@ function getPlotCenterCFrame()
     return savedPlotCenter and CFrame.new(savedPlotCenter + Vector3.new(0, 3, 0)) or nil
 end
 
-function returnToGarden()
+function isNearOwnPlotCenter(extra)
     refreshOwnerPlot()
-    tpInstant(savedPlotCenter)
+    if not savedPlotCenter then return false end
+    local hrp = getRoot()
+    if not hrp then return false end
+    extra = extra or 22
+    return flatDistXZ(hrp.Position, savedPlotCenter) <= extra
+end
+
+function returnToGarden()
+    if isNearOwnPlotCenter(28) then return end
+    refreshOwnerPlot()
+    if savedPlotCenter then tpInstant(savedPlotCenter) end
 end
 
 function holdGardenStill(duration)
@@ -2884,9 +2893,7 @@ function matchesPet(species, size, target)
 end
 
 function matchesAnySelectedPet(species, size)
-    if genv.ftgs_Kaitun_AutoBuyAllPet then
-        return petMatchesRarityFilter(species, kaitunPetRarities)
-    end
+    if genv.ftgs_Kaitun_AutoBuyAllPet then return true end
     if not setHasAny(selectedPets) then return false end
     for petName in selectedPets do
         if matchesPet(species, size, petName) then return true end
@@ -3095,24 +3102,6 @@ function consumeFreePlantSpot()
         table.remove(cachedFreePlantSpots, 1)
     end
 end
-function pickKaitunPlantSeed()
-    local d = PlayerReplica and PlayerReplica.Data
-    local seeds = d and d.Inventory and d.Inventory.Seeds
-    if not seeds then return nil, nil end
-    local bestName, bestRank, bestTool
-    for name, count in pairs(seeds) do
-        if (count or 0) > 0 and not isExcludedPlantBuySeed(name) and seedMatchesRarityFilter(name, kaitunPlantRarities) then
-            local tool = findSeedToolByName(name)
-            if tool then
-                local rank = getRarityRank(getSeedRarity(name))
-                if not bestRank or rank < bestRank then
-                    bestName, bestRank, bestTool = name, rank, tool
-                end
-            end
-        end
-    end
-    return bestName, bestTool
-end
 function syncKaitunToggles()
     if genv.ftgs_Kaitun_AutoBuyAllSeed then genv.ftgs_AutoBuyAllSeed = true end
     if genv.ftgs_Kaitun_AutoBuyAllGear then genv.ftgs_AutoBuyAllGear = true end
@@ -3123,7 +3112,10 @@ function syncKaitunToggles()
     if genv.ftgs_Kaitun_AutoCollectDrops then genv.ftgs_AutoCollectDrops = true end
     if genv.ftgs_Kaitun_AutoSteal then genv.ftgs_AutoSteal = true end
     if genv.ftgs_Kaitun_AutoBuyAllPet then genv.ftgs_AutoBuyPet = true end
-    if genv.ftgs_Kaitun_AutoPlantAll then genv.ftgs_AutoPlant = true end
+    if genv.ftgs_Kaitun_AutoPlantAll then
+        genv.ftgs_AutoPlant = true
+        for _, name in PlantSeedNames do selectedPlantSeeds[name] = true end
+    end
 end
 function getSeedPrice(name)
     local info = SeedDataByName[name]
@@ -3577,19 +3569,13 @@ function tryBuyGearsFast()
 end
 
 function tryAutoPlant()
-    local kaitun = genv.ftgs_Kaitun_AutoPlantAll
-    if (not genv.ftgs_AutoPlant and not kaitun) then return end
+    if not genv.ftgs_AutoPlant then return end
     if os.clock() - lastPlant < COOLDOWN.Plant then return end
     if not isInGardenActionRange() then return end
     if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
-    local seedName, tool
-    if kaitun then
-        seedName, tool = pickKaitunPlantSeed()
-    else
-        if not setHasAny(selectedPlantSeeds) then return end
-        seedName, tool = pickNextPlantSeed()
-    end
+    if not setHasAny(selectedPlantSeeds) then return end
+    local seedName, tool = pickNextPlantSeed()
     if not seedName or not tool then return end
     local pos = getFreePlantSpot(true)
     if not pos then return end
@@ -3704,7 +3690,7 @@ end
 
 function tryShovel()
     if not genv.ftgs_AutoShovel or shovelBusy then return end
-    if not setHasAny(selectedShovelRarities) then return end
+    if not setHasAny(selectedShovelSeeds) then return end
     if os.clock() - lastShovel < COOLDOWN.Shovel then return end
     if not isNearPlotForActions() then return end
     refreshOwnerPlot()
@@ -3716,7 +3702,7 @@ function tryShovel()
     for _, pl in pf:GetChildren() do
         local pid = pl:GetAttribute("PlantId")
         local crop = pl:GetAttribute("SeedName") or pl:GetAttribute("CorePartName") or pl:GetAttribute("PlantName")
-        if pid and crop and seedMatchesRarityFilter(crop, selectedShovelRarities) then
+        if pid and crop and seedInSet(selectedShovelSeeds, crop) then
             lastShovel = os.clock()
             shovelBusy = true
             task.spawn(function()
@@ -3985,6 +3971,7 @@ end
 
 function tryAutoSteal()
     if not genv.ftgs_AutoSteal or stealBusy or isInventoryFull() then return end
+    if not isNightTime() then return end
     stealBusy = true
     local sessionId = stealSessionId
     task.spawn(function()
@@ -3997,7 +3984,7 @@ function tryAutoSteal()
             if #targets == 0 then break end
             local worked = false
             for _, t in ipairs(targets) do
-                if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId then break end
+                if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId or not isNightTime() then break end
                 if isInventoryFull() then break end
                 local plot = t.plot
                 local owner = t.owner
@@ -4008,7 +3995,7 @@ function tryAutoSteal()
                 if #fruits == 0 then continue end
                 local stolenOnPlot = 0
                 for _, fruit in fruits do
-                    if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId then break end
+                    if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId or not isNightTime() then break end
                     if isInventoryFull() then break end
                     if owner and isOwnerInPlot(plot, owner) then break end
                     if stealFruit(fruit, uid, sessionId) then
@@ -4017,16 +4004,11 @@ function tryAutoSteal()
                     end
                     task.wait(0.015)
                 end
-                if stolenOnPlot > 0 and genv.ftgs_AutoSteal and sessionId == stealSessionId then
-                    returnToGarden()
-                    task.wait(0.05)
-                end
                 if worked then break end
             end
             if not worked then break end
         end
         if sessionId == stealSessionId then
-            if not isNightTime() then returnToGarden() end
             movementBypass = false
             gardenActionLock = false
             stealBusy = false
@@ -4058,9 +4040,7 @@ function isRefTameable(refPart)
 end
 
 function tryBuyPet()
-    syncKaitunToggles()
     if not genv.ftgs_AutoBuyPet and not genv.ftgs_Kaitun_AutoBuyAllPet then return end
-    if os.clock() - lastPet < COOLDOWN.Pet then return end
     initMapFolders()
     if not WildPetFolder then return end
     local candidates = {}
@@ -4094,15 +4074,13 @@ function tryBuyPet()
     if #candidates == 0 then return end
     table.sort(candidates, function(a, b) return (a.price or 0) < (b.price or 0) end)
     local pick = candidates[1]
-    lastPet = os.clock()
     local tameRemote = Net.Pets and Net.Pets.WildPetTame
     if pick.pos then tpInstant(pick.pos) end
-    for _ = 1, 8 do
+    for _ = 1, 12 do
         if tameRemote then safeNetCall(tameRemote, pick.ref) end
     end
     local prompt = pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true)
     if prompt then fireProximityPromptFast(prompt) end
-    trackPetBuy(getPetDisplayName(pick.species, nil), pick.price)
 end
 
 function hasIntruderOnPlot()
@@ -5876,29 +5854,27 @@ makeToggle(AutoTab, "Auto Collect item", "collect item drop", "ftgs_AutoCollectD
 makeToggle(AutoTab, "Auto Collect Seeds", "collect rainbow and gold and mega seeds", "ftgs_AutoCollectMutation")
 makeToggle(AutoTab, "Auto Plant", "auto plant ( must be in your garden ) ", "ftgs_AutoPlant")
 multiDropdown(AutoTab, "Plant Seeds", PlantSeedNames, selectedPlantSeeds, false)
-makeToggle(AutoTab, "Auto Shovel", "shovel plants by rarity tier", "ftgs_AutoShovel")
-multiDropdown(AutoTab, "Shovel Rarity", RARITY_TIER_LIST, selectedShovelRarities, false)
+makeToggle(AutoTab, "Auto Shovel", "shovel plants you select", "ftgs_AutoShovel")
+multiDropdown(AutoTab, "Shovel Seeds", SeedNames, selectedShovelSeeds, false)
 makeToggle(AutoTab, "Auto Buy Pet", "select pet to buy", "ftgs_AutoBuyPet")
 multiDropdown(AutoTab, "Select Pets", PET_LIST, selectedPets, false)
 
 KaitunTab = Window:Tab({ Title = "Kaitun", Icon = "zap" })
 KaitunTab:Section({ Title = "Farm" })
-makeToggle(KaitunTab, "Auto Plant All Seed", "plant all owned seeds by rarity filter", "ftgs_Kaitun_AutoPlantAll")
-multiDropdown(KaitunTab, "Plant Rarity", RARITY_TIER_LIST, kaitunPlantRarities, true)
-makeToggle(KaitunTab, "Auto Harvest Best", "harvest highest value fruit", "ftgs_Kaitun_AutoHarvestBest")
-makeToggle(KaitunTab, "Auto Expand Garden", "auto expand plot", "ftgs_Kaitun_AutoExpand")
+makeToggle(KaitunTab, "Auto Plant All Seed", "uses Auto Plant + all seeds", "ftgs_Kaitun_AutoPlantAll")
+makeToggle(KaitunTab, "Auto Harvest Best", "uses Main tab harvest best", "ftgs_Kaitun_AutoHarvestBest")
+makeToggle(KaitunTab, "Auto Expand Garden", "uses Main tab expand", "ftgs_Kaitun_AutoExpand")
 KaitunTab:Section({ Title = "Shop" })
-makeToggle(KaitunTab, "Auto Buy All Seed", "buy every seed in shop", "ftgs_Kaitun_AutoBuyAllSeed")
-makeToggle(KaitunTab, "Auto Buy All Gear", "buy every gear in shop", "ftgs_Kaitun_AutoBuyAllGear")
+makeToggle(KaitunTab, "Auto Buy All Seed", "uses Shop buy all seed", "ftgs_Kaitun_AutoBuyAllSeed")
+makeToggle(KaitunTab, "Auto Buy All Gear", "uses Shop buy all gear", "ftgs_Kaitun_AutoBuyAllGear")
 KaitunTab:Section({ Title = "Sell & Steal" })
-makeToggle(KaitunTab, "Auto Sell All", "sell all fruit continuously", "ftgs_Kaitun_AutoSellAll")
-makeToggle(KaitunTab, "Auto Steal", "auto steal at night", "ftgs_Kaitun_AutoSteal")
+makeToggle(KaitunTab, "Auto Sell All", "uses Main auto sell", "ftgs_Kaitun_AutoSellAll")
+makeToggle(KaitunTab, "Auto Steal", "uses Automation auto steal", "ftgs_Kaitun_AutoSteal")
 KaitunTab:Section({ Title = "Pet" })
-makeToggle(KaitunTab, "Auto Buy All Pet", "tame wild pets by rarity (empty = all)", "ftgs_Kaitun_AutoBuyAllPet")
-multiDropdown(KaitunTab, "Pet Rarity", RARITY_TIER_LIST, kaitunPetRarities, true)
+makeToggle(KaitunTab, "Auto Buy All Pet", "uses Auto Buy Pet for any wild pet", "ftgs_Kaitun_AutoBuyAllPet")
 KaitunTab:Section({ Title = "Collect" })
-makeToggle(KaitunTab, "Auto Collect Rainbow/Gold/Mega Seed", "event mutation seeds", "ftgs_Kaitun_AutoCollectMutation")
-makeToggle(KaitunTab, "Auto Collect Item Drop", "pick up map drops", "ftgs_Kaitun_AutoCollectDrops")
+makeToggle(KaitunTab, "Auto Collect Rainbow/Gold/Mega Seed", "uses Automation collect seeds", "ftgs_Kaitun_AutoCollectMutation")
+makeToggle(KaitunTab, "Auto Collect Item Drop", "uses Automation collect drops", "ftgs_Kaitun_AutoCollectDrops")
 
 ShopTab = Window:Tab({ Title = "Shop", Icon = "shopping-cart" })
 makeToggle(ShopTab, "Auto Buy Seed", "select seeds to buy", "ftgs_AutoBuySeed")
@@ -6131,7 +6107,7 @@ end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoSteal and not stealBusy then safeLoop(tryAutoSteal) end
+        if genv.ftgs_AutoSteal and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
         task.wait(stealBusy and 0.08 or 0.35)
     end
 end)
@@ -6148,7 +6124,7 @@ hubLoop(function()
     while true do
         safeLoop(syncKaitunToggles)
         if genv.ftgs_AutoBuyPet or genv.ftgs_Kaitun_AutoBuyAllPet then safeLoop(tryBuyPet) end
-        task.wait(COOLDOWN.Pet)
+        task.wait(0)
     end
 end)
 
@@ -6169,7 +6145,7 @@ end)
 hubLoop(function()
     while true do
         safeLoop(syncKaitunToggles)
-        if genv.ftgs_AutoPlant or genv.ftgs_Kaitun_AutoPlantAll then safeLoop(tryAutoPlant) end
+        if genv.ftgs_AutoPlant then safeLoop(tryAutoPlant) end
         task.wait(COOLDOWN.Plant)
     end
 end)
