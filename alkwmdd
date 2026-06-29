@@ -753,6 +753,16 @@ PET_LIST = {
     "Monkey", "Bee", "BlackDragon", "GoldenDragonfly", "Unicorn", "Raccoon", "IceSerpent",
     "Robin", "Deer", "Bunny", "Turtle", "Frog", "GoldenDragon", "Owl",
 }
+PetDataBySpecies, PetSpeciesNames = {}, {}
+if type(PetData) == "table" then
+    for k, v in pairs(PetData) do
+        if type(k) == "string" and type(v) == "table" then
+            PetDataBySpecies[k] = v
+            PetSpeciesNames[#PetSpeciesNames + 1] = k
+        end
+    end
+    table.sort(PetSpeciesNames)
+end
 SPRINKLER_LIST = { "Super Sprinkler", "Legendary Sprinkler", "Rare Sprinkler", "Uncommon Sprinkler", "Common Sprinkler" }
 UI_THEME_NAMES = { "Black", "Pink", "Red", "Green", "Blue", "White", "Gray", "Brown", "Yellow", "Purple" }
 UI_THEMES = {
@@ -767,8 +777,11 @@ UI_THEMES = {
     Yellow = { accent = "#eab308", bg = "#1a160a", btn = "#3d3415", text = "#fffbe6", toggle = "#eab308" },
     Purple = { accent = "#a855f7", bg = "#140a1a", btn = "#2a153d", text = "#f3e6ff", toggle = "#a855f7" },
 }
-COOLDOWN = { Harvest = 0.01, Plant = 0.01, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.25, Gear = 0.5, Pet = 0.015, Mail = 2, Water = 0.35 }
+COOLDOWN = { Harvest = 0.01, Plant = 0.01, Buy = 0.01, Expand = 8, Sell = 0.5, Shovel = 0.05, Gear = 0.5, Pet = 0.01, Mail = 2, Water = 0.35 }
 PLANT_MIN_DIST = 3
+PLANT_GRID_STEP = 6
+PLANT_GRID_MIN_DIST = 6
+FREE_PLANT_BUILD_TTL = 1.2
 PLANT_CENTER_AVOID = 18
 PET_DEFEND_RADIUS = 22
 PET_DEFEND_PLAYER_RANGE = 32
@@ -791,6 +804,7 @@ MAIL_MAX_PER_GIFT = 20
 MAIL_SEND_GAP = 1.5
 MAIL_GEAR_CATEGORIES = { "Sprinklers", "WateringCans", "Mushrooms", "Gnomes", "Raccoons", "Crates", "SeedPacks", "Trowels", "Props", "Flashbangs", "EmptyPots", "Shovels" }
 RARITY_RANK = { Secret = 1, Super = 2, Mythic = 3, Legendary = 4, Epic = 5, Rare = 6, Uncommon = 7, Common = 8 }
+RARITY_TIER_LIST = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Super" }
 CONFIG_FILE = "ntmthub_gag2_config.json"
 
 movementBypass = false
@@ -837,6 +851,16 @@ genv.ftgs_BypassMovement = true
 genv.ftgs_Fullbright = false
 genv.ftgs_FruitESP = false
 genv.ftgs_AutoHarvestBest = false
+genv.ftgs_Kaitun_AutoPlantAll = false
+genv.ftgs_Kaitun_AutoBuyAllSeed = false
+genv.ftgs_Kaitun_AutoBuyAllGear = false
+genv.ftgs_Kaitun_AutoHarvestBest = false
+genv.ftgs_Kaitun_AutoSellAll = false
+genv.ftgs_Kaitun_AutoBuyAllPet = false
+genv.ftgs_Kaitun_AutoExpand = false
+genv.ftgs_Kaitun_AutoCollectMutation = false
+genv.ftgs_Kaitun_AutoCollectDrops = false
+genv.ftgs_Kaitun_AutoSteal = false
 autoClickSpeed = 0.04
 hubKeyUnlocked, hubTabsBuilt, hubKeyDraft, hubKeyInputEl = false, false, "", nil
 weatherPredictPara, weatherLivePara = nil, nil
@@ -1964,7 +1988,8 @@ TRANSLATE_LANG_CODES = {
 }
 
 selectedBuySeeds, selectedBuyGears = {}, {}
-selectedPlantSeeds, selectedShovelSeeds, selectedSprinklers, selectedPets = { Carrot = true }, { Carrot = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
+selectedPlantSeeds, selectedShovelRarities, selectedSprinklers, selectedPets = { Carrot = true }, { Common = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
+kaitunPlantRarities, kaitunPetRarities = {}, {}
 mailUsername, mailSeedName, mailGearName = "", "Carrot", GearNames[1] or ""
 mailSeedAmount, mailGearAmount, mailMessage = 1, 0, "NTMT HUB"
 selectedFindPet = "Unicorn"
@@ -2017,6 +2042,9 @@ EMPTY_SPOT_CACHE_TTL = 0.2
 lastOccupiedScan = 0
 cachedOccupied = nil
 OCCUPIED_CACHE_TTL = 0.2
+cachedFreePlantSpots = nil
+lastFreePlantBuild = 0
+lastShovelPos = nil
 
 function invalidateFarmCaches()
     cachedBestHarvest = nil
@@ -2025,6 +2053,8 @@ function invalidateFarmCaches()
     lastEmptySpotScan = 0
     cachedOccupied = nil
     lastOccupiedScan = 0
+    cachedFreePlantSpots = nil
+    lastFreePlantBuild = 0
 end
 
 function saveConfig()
@@ -2854,6 +2884,9 @@ function matchesPet(species, size, target)
 end
 
 function matchesAnySelectedPet(species, size)
+    if genv.ftgs_Kaitun_AutoBuyAllPet then
+        return petMatchesRarityFilter(species, kaitunPetRarities)
+    end
     if not setHasAny(selectedPets) then return false end
     for petName in selectedPets do
         if matchesPet(species, size, petName) then return true end
@@ -2978,6 +3011,120 @@ end
 
 function getRarityRank(rarity) return RARITY_RANK[rarity] or 99 end
 function getSeedRarity(seedName) local i = SeedDataByName[seedName] return i and i.Rarity or "Common" end
+function getPetRarity(species)
+    local d = PetDataBySpecies[species]
+    return (d and d.Rarity) or "Common"
+end
+function rarityInSet(set, rarity)
+    if not setHasAny(set) then return true end
+    for r in set do if r == rarity then return true end end
+    return false
+end
+function seedMatchesRarityFilter(seedName, rarities)
+    if not seedName then return false end
+    return rarityInSet(rarities, getSeedRarity(seedName))
+end
+function petMatchesRarityFilter(species, rarities)
+    if not species then return false end
+    return rarityInSet(rarities, getPetRarity(species))
+end
+function getPlotPlantAreas(plot)
+    local areas = {}
+    if not plot then return areas end
+    for _, p in Services.CollectionService:GetTagged("PlantArea") do
+        if p:IsA("BasePart") and p:IsDescendantOf(plot) and p.Size.X * p.Size.Z > 400 then
+            areas[#areas + 1] = p
+        end
+    end
+    if #areas == 0 then
+        local ref = plot:FindFirstChild("PlotSizeReference")
+        if ref and ref:IsA("BasePart") then areas = { ref } end
+    end
+    return areas
+end
+function buildFreePlantSpots(plot)
+    local grid, free, seen = {}, {}, {}
+    for _, area in getPlotPlantAreas(plot) do
+        local cf, sz = area.CFrame, area.Size
+        local topY = area.Position.Y + sz.Y / 2 + 0.3
+        local hx, hz = sz.X / 2 - 3, sz.Z / 2 - 3
+        local nx, nz = math.floor((2 * hx) / PLANT_GRID_STEP), math.floor((2 * hz) / PLANT_GRID_STEP)
+        for ix = 0, nx do
+            for iz = 0, nz do
+                local w = (cf * CFrame.new(-hx + ix * PLANT_GRID_STEP, 0, -hz + iz * PLANT_GRID_STEP)).Position
+                local key = math.floor(w.X / 4 + 0.5) .. "," .. math.floor(w.Z / 4 + 0.5)
+                if not seen[key] then
+                    seen[key] = true
+                    grid[#grid + 1] = Vector3.new(w.X, topY, w.Z)
+                end
+            end
+        end
+    end
+    local occ = {}
+    local pf = plot:FindFirstChild("Plants")
+    if pf then
+        for _, pl in pf:GetChildren() do
+            local ok, pv = pcall(function() return pl:GetPivot().Position end)
+            if ok then occ[#occ + 1] = pv end
+        end
+    end
+    for _, pos in grid do
+        local clear = true
+        for _, o in occ do
+            if (Vector3.new(o.X, 0, o.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude < PLANT_GRID_MIN_DIST then
+                clear = false
+                break
+            end
+        end
+        if clear then free[#free + 1] = pos end
+    end
+    return free
+end
+function getFreePlantSpot(force)
+    if not OwnerPlot then refreshOwnerPlot() end
+    if not OwnerPlot then return nil end
+    local now = os.clock()
+    if force or not cachedFreePlantSpots or now - lastFreePlantBuild > FREE_PLANT_BUILD_TTL then
+        cachedFreePlantSpots = buildFreePlantSpots(OwnerPlot)
+        lastFreePlantBuild = now
+    end
+    return cachedFreePlantSpots[1]
+end
+function consumeFreePlantSpot()
+    if cachedFreePlantSpots and #cachedFreePlantSpots > 0 then
+        table.remove(cachedFreePlantSpots, 1)
+    end
+end
+function pickKaitunPlantSeed()
+    local d = PlayerReplica and PlayerReplica.Data
+    local seeds = d and d.Inventory and d.Inventory.Seeds
+    if not seeds then return nil, nil end
+    local bestName, bestRank, bestTool
+    for name, count in pairs(seeds) do
+        if (count or 0) > 0 and not isExcludedPlantBuySeed(name) and seedMatchesRarityFilter(name, kaitunPlantRarities) then
+            local tool = findSeedToolByName(name)
+            if tool then
+                local rank = getRarityRank(getSeedRarity(name))
+                if not bestRank or rank < bestRank then
+                    bestName, bestRank, bestTool = name, rank, tool
+                end
+            end
+        end
+    end
+    return bestName, bestTool
+end
+function syncKaitunToggles()
+    if genv.ftgs_Kaitun_AutoBuyAllSeed then genv.ftgs_AutoBuyAllSeed = true end
+    if genv.ftgs_Kaitun_AutoBuyAllGear then genv.ftgs_AutoBuyAllGear = true end
+    if genv.ftgs_Kaitun_AutoHarvestBest then genv.ftgs_AutoHarvestBest = true end
+    if genv.ftgs_Kaitun_AutoSellAll then genv.ftgs_AutoSellEverytime = true end
+    if genv.ftgs_Kaitun_AutoExpand then genv.ftgs_AutoExpand = true end
+    if genv.ftgs_Kaitun_AutoCollectMutation then genv.ftgs_AutoCollectMutation = true end
+    if genv.ftgs_Kaitun_AutoCollectDrops then genv.ftgs_AutoCollectDrops = true end
+    if genv.ftgs_Kaitun_AutoSteal then genv.ftgs_AutoSteal = true end
+    if genv.ftgs_Kaitun_AutoBuyAllPet then genv.ftgs_AutoBuyPet = true end
+    if genv.ftgs_Kaitun_AutoPlantAll then genv.ftgs_AutoPlant = true end
+end
 function getSeedPrice(name)
     local info = SeedDataByName[name]
     if not info then return math.huge end
@@ -3430,20 +3577,28 @@ function tryBuyGearsFast()
 end
 
 function tryAutoPlant()
-    if not genv.ftgs_AutoPlant or not setHasAny(selectedPlantSeeds) then return end
+    local kaitun = genv.ftgs_Kaitun_AutoPlantAll
+    if (not genv.ftgs_AutoPlant and not kaitun) then return end
     if os.clock() - lastPlant < COOLDOWN.Plant then return end
     if not isInGardenActionRange() then return end
     if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
-    local seedName, tool = pickNextPlantSeed()
-    if not tool then return end
-    local pos = scanGardenForEmptySpot(true)
-    if not pos or not isPosInsidePlot(pos, 1) then return end
+    local seedName, tool
+    if kaitun then
+        seedName, tool = pickKaitunPlantSeed()
+    else
+        if not setHasAny(selectedPlantSeeds) then return end
+        seedName, tool = pickNextPlantSeed()
+    end
+    if not seedName or not tool then return end
+    local pos = getFreePlantSpot(true)
+    if not pos then return end
     lastPlant = os.clock()
     equipTool(tool, true)
     tool = findSeedToolByName(seedName) or tool
-    safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool)
+    safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool, OwnerPlot)
     if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
+    consumeFreePlantSpot()
     invalidateFarmCaches()
 end
 
@@ -3548,56 +3703,41 @@ function tryAutoWater()
 end
 
 function tryShovel()
-    if not genv.ftgs_AutoShovel or shovelBusy or not setHasAny(selectedShovelSeeds) then return end
+    if not genv.ftgs_AutoShovel or shovelBusy then return end
+    if not setHasAny(selectedShovelRarities) then return end
     if os.clock() - lastShovel < COOLDOWN.Shovel then return end
     if not isNearPlotForActions() then return end
     refreshOwnerPlot()
-    safeNetCall(Net.Garden and Net.Garden.RequestGardens)
-    local list = {}
-    for plantId, pd in pairs(trackedPlants) do
-        local seed = getPlantSeedName(pd)
-        if seedInSet(selectedShovelSeeds, seed) then
-            list[#list + 1] = { plantId = plantId, mutation = pd.Mutation or "Normal", seedName = seed }
-        end
-    end
-    if #list == 0 then
-        local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
-        if pf then
-            for _, plant in pf:GetChildren() do
-                local seed = plant:GetAttribute("SeedName") or plant:GetAttribute("PlantName")
-                if seedInSet(selectedShovelSeeds, seed) then
-                    list[#list + 1] = { plantId = plant:GetAttribute("PlantId"), mutation = plant:GetAttribute("Mutation") or "Normal", seedName = seed }
-                end
-            end
-        end
-    end
-    if #list == 0 then return end
-    table.sort(list, function(a, b)
-        local ma = a.mutation == "Rainbow" and 3 or (a.mutation == "Gold" and 2 or 1)
-        local mb = b.mutation == "Rainbow" and 3 or (b.mutation == "Gold" and 2 or 1)
-        if ma ~= mb then return ma < mb end
-        return getRarityRank(getSeedRarity(a.seedName)) > getRarityRank(getSeedRarity(b.seedName))
-    end)
+    local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+    if not pf then return end
     local shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
     if not shovel then return end
-    lastShovel = os.clock()
-    shovelBusy = true
-    task.spawn(function()
-        equipTool(shovel)
-        task.wait(0.2)
-        shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
-        if not shovel then shovelBusy = false return end
-        local removed = 0
-        for _, target in list do
-            if removed >= SHOVEL_BATCH then break end
-            if not target.plantId then continue end
-            safeNetCall(Net.Shovel and Net.Shovel.UseShovel, target.plantId, "", shovelName, shovel)
-            if type(shovel.Activate) == "function" then xpcall(function() shovel:Activate() end, noopErr) end
-            removed += 1
-            task.wait(COOLDOWN.Shovel)
+    shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
+    for _, pl in pf:GetChildren() do
+        local pid = pl:GetAttribute("PlantId")
+        local crop = pl:GetAttribute("SeedName") or pl:GetAttribute("CorePartName") or pl:GetAttribute("PlantName")
+        if pid and crop and seedMatchesRarityFilter(crop, selectedShovelRarities) then
+            lastShovel = os.clock()
+            shovelBusy = true
+            task.spawn(function()
+                equipTool(shovel, true)
+                shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
+                if not shovel then shovelBusy = false return end
+                shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
+                local ok, pos = pcall(function() return pl:GetPivot().Position end)
+                if ok and pos then
+                    if not lastShovelPos or (pos - lastShovelPos).Magnitude > 10 then
+                        tpInstant(pos)
+                        lastShovelPos = pos
+                    end
+                end
+                safeNetCall(Net.Shovel and Net.Shovel.UseShovel, pid, "", shovelName, shovel)
+                if type(shovel.Activate) == "function" then xpcall(function() shovel:Activate() end, noopErr) end
+                shovelBusy = false
+            end)
+            return
         end
-        shovelBusy = false
-    end)
+    end
 end
 
 -- ===== STEAL =====
@@ -3918,80 +4058,51 @@ function isRefTameable(refPart)
 end
 
 function tryBuyPet()
-    if not genv.ftgs_AutoBuyPet or not WildPetSpawns or isCatchingPet then return end
+    syncKaitunToggles()
+    if not genv.ftgs_AutoBuyPet and not genv.ftgs_Kaitun_AutoBuyAllPet then return end
     if os.clock() - lastPet < COOLDOWN.Pet then return end
     initMapFolders()
     if not WildPetFolder then return end
     local candidates = {}
-    for _, model in WildPetSpawns:GetChildren() do
-        if not model:IsA("Model") then continue end
-        if not matchesAnySelectedPet(model:GetAttribute("PetName"), model:GetAttribute("PetSize")) then continue end
-        local ref = resolveRefFromModel(model)
-        if not ref or not isRefTameable(ref) then continue end
-        local root = model.PrimaryPart or model:FindFirstChild("RootPart") or model:FindFirstChildWhichIsA("BasePart")
-        local price = ref:GetAttribute("Price") or 0
-        candidates[#candidates + 1] = { ref = ref, root = root, model = model, price = price, species = model:GetAttribute("PetName") }
+    for _, ref in WildPetFolder:GetChildren() do
+        if not ref:IsA("BasePart") or not ref.Parent then continue end
+        local species = ref:GetAttribute("PetName")
+        if not species or not isRefTameable(ref) then continue end
+        if not matchesAnySelectedPet(species, ref:GetAttribute("PetSize")) then continue end
+        candidates[#candidates + 1] = {
+            ref = ref,
+            species = species,
+            price = ref:GetAttribute("Price") or 0,
+            pos = ref.Position,
+        }
+    end
+    if #candidates == 0 then
+        for _, model in (WildPetSpawns and WildPetSpawns:GetChildren() or {}) do
+            if not model:IsA("Model") then continue end
+            local species = model:GetAttribute("PetName")
+            local ref = resolveRefFromModel(model)
+            if not ref or not isRefTameable(ref) then continue end
+            if not matchesAnySelectedPet(species, model:GetAttribute("PetSize")) then continue end
+            candidates[#candidates + 1] = {
+                ref = ref,
+                species = species,
+                price = ref:GetAttribute("Price") or 0,
+                pos = getWildPetPosition({ ref = ref, root = model.PrimaryPart, model = model }),
+            }
+        end
     end
     if #candidates == 0 then return end
     table.sort(candidates, function(a, b) return (a.price or 0) < (b.price or 0) end)
     local pick = candidates[1]
-    local key = tostring(pick.ref)
-    if petCatchCooldown[key] and os.clock() - petCatchCooldown[key] < COOLDOWN.Pet then return end
-    petCatchCooldown[key] = os.clock()
     lastPet = os.clock()
-    isCatchingPet = true
-    activeDefendPetPos = nil
-    task.spawn(function()
-        local prompt = (pick.model and pick.model:FindFirstChildWhichIsA("ProximityPrompt", true))
-            or (pick.ref and pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true))
-        local tameRemote = Net.Pets and Net.Pets.WildPetTame
-        local function doTame()
-            if prompt then fireProximityPromptFast(prompt) end
-            if tameRemote then
-                safeNetCall(tameRemote, pick.ref)
-                safeNetCall(tameRemote, pick.ref)
-            end
-        end
-        movementBypass = true
-        gardenActionLock = true
-        local hum = getHumanoid()
-        local done, conn = false, nil
-        local tr = Net.Pets and Net.Pets.WildPetTameResult
-        if tr and tr.OnClientEvent then
-            conn = tr.OnClientEvent:Connect(function(_, uid) if uid == LocalPlayer.UserId then done = true end end)
-        end
-        local startPos = getWildPetPosition(pick)
-        if startPos then tpInstant(startPos) stickToPosition(startPos) end
-        local deadline = os.clock() + 2.5
-        while not done and os.clock() < deadline and genv.ftgs_AutoBuyPet do
-            local pos = getWildPetPosition(pick)
-            if pos then
-                activeDefendPetPos = pos
-                stickToPosition(pos)
-                local intruders = getPlayersNearPosition(pos, PET_DEFEND_RADIUS)
-                if #intruders > 0 then
-                    for _, target in intruders do
-                        local thrp = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-                        if thrp then
-                            tpInstant(thrp.Position + (thrp.CFrame.LookVector * -4))
-                            sendAutoClick(4)
-                        end
-                    end
-                    stickToPosition(pos)
-                end
-            end
-            doTame()
-            task.wait(0.003)
-        end
-        restoreAllHitboxes()
-        activeDefendPetPos = nil
-        if conn then conn:Disconnect() end
-        if done then trackPetBuy(getPetDisplayName(pick.species, nil), pick.price) end
-        if hum then hum.PlatformStand = false end
-        movementBypass = false
-        gardenActionLock = false
-        isCatchingPet = false
-    end)
+    local tameRemote = Net.Pets and Net.Pets.WildPetTame
+    if pick.pos then tpInstant(pick.pos) end
+    for _ = 1, 8 do
+        if tameRemote then safeNetCall(tameRemote, pick.ref) end
+    end
+    local prompt = pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then fireProximityPromptFast(prompt) end
+    trackPetBuy(getPetDisplayName(pick.species, nil), pick.price)
 end
 
 function hasIntruderOnPlot()
@@ -5683,6 +5794,7 @@ function makeToggle(tab, title, desc, key)
     tab:Toggle({ Title = title, Desc = desc, Default = genv[key] or false, Callback = function(s)
         genv[key] = s
         saveConfig()
+        if type(key) == "string" and string.find(key, "ftgs_Kaitun", 1, true) then syncKaitunToggles() end
         if not s then handleToggleOff(key) end
     end })
 end
@@ -5764,10 +5876,29 @@ makeToggle(AutoTab, "Auto Collect item", "collect item drop", "ftgs_AutoCollectD
 makeToggle(AutoTab, "Auto Collect Seeds", "collect rainbow and gold and mega seeds", "ftgs_AutoCollectMutation")
 makeToggle(AutoTab, "Auto Plant", "auto plant ( must be in your garden ) ", "ftgs_AutoPlant")
 multiDropdown(AutoTab, "Plant Seeds", PlantSeedNames, selectedPlantSeeds, false)
-makeToggle(AutoTab, "Auto Shovel", "shovel fruit you select", "ftgs_AutoShovel")
-multiDropdown(AutoTab, "Shovel Seeds", SeedNames, selectedShovelSeeds, false)
+makeToggle(AutoTab, "Auto Shovel", "shovel plants by rarity tier", "ftgs_AutoShovel")
+multiDropdown(AutoTab, "Shovel Rarity", RARITY_TIER_LIST, selectedShovelRarities, false)
 makeToggle(AutoTab, "Auto Buy Pet", "select pet to buy", "ftgs_AutoBuyPet")
 multiDropdown(AutoTab, "Select Pets", PET_LIST, selectedPets, false)
+
+KaitunTab = Window:Tab({ Title = "Kaitun", Icon = "zap" })
+KaitunTab:Section({ Title = "Farm" })
+makeToggle(KaitunTab, "Auto Plant All Seed", "plant all owned seeds by rarity filter", "ftgs_Kaitun_AutoPlantAll")
+multiDropdown(KaitunTab, "Plant Rarity", RARITY_TIER_LIST, kaitunPlantRarities, true)
+makeToggle(KaitunTab, "Auto Harvest Best", "harvest highest value fruit", "ftgs_Kaitun_AutoHarvestBest")
+makeToggle(KaitunTab, "Auto Expand Garden", "auto expand plot", "ftgs_Kaitun_AutoExpand")
+KaitunTab:Section({ Title = "Shop" })
+makeToggle(KaitunTab, "Auto Buy All Seed", "buy every seed in shop", "ftgs_Kaitun_AutoBuyAllSeed")
+makeToggle(KaitunTab, "Auto Buy All Gear", "buy every gear in shop", "ftgs_Kaitun_AutoBuyAllGear")
+KaitunTab:Section({ Title = "Sell & Steal" })
+makeToggle(KaitunTab, "Auto Sell All", "sell all fruit continuously", "ftgs_Kaitun_AutoSellAll")
+makeToggle(KaitunTab, "Auto Steal", "auto steal at night", "ftgs_Kaitun_AutoSteal")
+KaitunTab:Section({ Title = "Pet" })
+makeToggle(KaitunTab, "Auto Buy All Pet", "tame wild pets by rarity (empty = all)", "ftgs_Kaitun_AutoBuyAllPet")
+multiDropdown(KaitunTab, "Pet Rarity", RARITY_TIER_LIST, kaitunPetRarities, true)
+KaitunTab:Section({ Title = "Collect" })
+makeToggle(KaitunTab, "Auto Collect Rainbow/Gold/Mega Seed", "event mutation seeds", "ftgs_Kaitun_AutoCollectMutation")
+makeToggle(KaitunTab, "Auto Collect Item Drop", "pick up map drops", "ftgs_Kaitun_AutoCollectDrops")
 
 ShopTab = Window:Tab({ Title = "Shop", Icon = "shopping-cart" })
 makeToggle(ShopTab, "Auto Buy Seed", "select seeds to buy", "ftgs_AutoBuySeed")
@@ -6014,7 +6145,11 @@ hubLoop(function()
 end)
 
 hubLoop(function()
-    while true do if genv.ftgs_AutoBuyPet then safeLoop(tryBuyPet) end task.wait(0.015) end
+    while true do
+        safeLoop(syncKaitunToggles)
+        if genv.ftgs_AutoBuyPet or genv.ftgs_Kaitun_AutoBuyAllPet then safeLoop(tryBuyPet) end
+        task.wait(COOLDOWN.Pet)
+    end
 end)
 
 hubLoop(function()
@@ -6033,8 +6168,9 @@ end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoPlant then safeLoop(tryAutoPlant) end
-        task.wait(genv.ftgs_AutoPlant and COOLDOWN.Plant or 0.35)
+        safeLoop(syncKaitunToggles)
+        if genv.ftgs_AutoPlant or genv.ftgs_Kaitun_AutoPlantAll then safeLoop(tryAutoPlant) end
+        task.wait(COOLDOWN.Plant)
     end
 end)
 
