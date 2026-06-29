@@ -834,6 +834,7 @@ harvestMaxWeight = 0
 stealSessionId = 0
 lastStealReturn = 0
 stealWasNight = false
+stealDawnReturnDone = false
 STEAL_RETURN_COOLDOWN = 2.5
 lastKnownMoveCF = nil
 favoriteRemote = nil
@@ -2618,34 +2619,31 @@ end
 
 function returnToGardenAfterSteal()
     refreshOwnerPlot()
-    local pos = getGardenReturnPos()
-    if not pos then return end
+    if not savedPlotCenter then return end
     local hrp = getRoot()
     if hrp then
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+        hrp.CFrame = CFrame.new(savedPlotCenter + Vector3.new(0, 3, 0))
     end
     lastStealReturn = os.clock()
+end
+
+function returnToGardenCenterOnce()
+    returnToGardenAfterSteal()
 end
 
 function returnToGardenOnce()
     local now = os.clock()
     if now - lastStealReturn < STEAL_RETURN_COOLDOWN then return end
     refreshOwnerPlot()
-    local pos = getGardenReturnPos()
-    if not pos then return end
+    if not savedPlotCenter then return end
     local hrp = getRoot()
-    if hrp and flatDistXZ(hrp.Position, pos) <= 34 then
+    if hrp and flatDistXZ(hrp.Position, savedPlotCenter) <= 28 then
         lastStealReturn = now
         return
     end
-    lastStealReturn = now
-    if hrp then
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
-    end
+    returnToGardenAfterSteal()
 end
 
 function returnToGarden()
@@ -3560,6 +3558,61 @@ function isDataReady(data)
     return maxAge <= 0 or age >= maxAge
 end
 
+function isGrownEntity(entity)
+    if not entity then return false end
+    local maxAge = entity:GetAttribute("MaxAge")
+    local currentAge = entity:GetAttribute("Age")
+    if maxAge == nil or currentAge == nil then return false end
+    return currentAge >= maxAge
+end
+
+function collectPhysicalHarvestables()
+    refreshOwnerPlot()
+    local list = {}
+    local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+    if not pf then return list end
+    for _, plant in pf:GetChildren() do
+        local parentSeed = plant:GetAttribute("SeedName") or plant:GetAttribute("PlantName") or plant:GetAttribute("CorePartName")
+        local plantData = { SeedName = parentSeed, PlantName = parentSeed }
+        local fruitsFolder = plant:FindFirstChild("Fruits")
+        if fruitsFolder then
+            for _, fruit in fruitsFolder:GetChildren() do
+                if fruit:IsA("Model") and isGrownEntity(fruit) and shouldHarvestTarget(plantData, { SeedName = parentSeed }) then
+                    list[#list + 1] = fruit
+                end
+            end
+        elseif plant:IsA("Model") and isGrownEntity(plant) and shouldHarvestTarget(plantData, nil) then
+            list[#list + 1] = plant
+        end
+    end
+    return list
+end
+
+function tryHarvestBestTick()
+    if not genv.ftgs_AutoHarvestBest then return end
+    refreshOwnerPlot()
+    if not OwnerPlot then return end
+    local bestEntity, bestVal
+    for _, entity in collectPhysicalHarvestables() do
+        local val = calculateStealValue(entity) or 0
+        if not bestEntity or val > bestVal then
+            bestEntity, bestVal = entity, val
+        end
+    end
+    if not bestEntity then return end
+    local plantId = bestEntity:GetAttribute("PlantId")
+    local fruitId = bestEntity:GetAttribute("FruitId") or ""
+    if not plantId then
+        local parentPlant = bestEntity:FindFirstAncestorWhichIsA("Model")
+        if parentPlant and parentPlant.Parent and parentPlant.Parent.Name == "Plants" then
+            plantId = parentPlant:GetAttribute("PlantId")
+        end
+    end
+    if plantId then
+        safeNetCall(Net.Garden and Net.Garden.CollectFruit, plantId, fruitId)
+    end
+end
+
 function isPhysicalFruitRipe(fruit, plant)
     if not fruit then return false end
     local maxAge = fruit:GetAttribute("MaxAge") or (plant and plant:GetAttribute("MaxAge"))
@@ -3660,23 +3713,9 @@ function cleanupFiredSetIfNeeded(now)
 end
 
 function tryHarvestTick()
-    if not autoHarvestOn() and not genv.ftgs_AutoHarvestBest then return end
+    if not autoHarvestOn() then return end
     local now = os.clock()
     local n = 0
-
-    if genv.ftgs_AutoHarvestBest then
-        if now - lastBestScan >= BEST_SCAN_INTERVAL then
-            lastBestScan = now
-            cachedBestHarvest = findBestHarvestableInGarden()
-        end
-        local best = cachedBestHarvest
-        if best then
-            safeNetCall(Net.Garden and Net.Garden.CollectFruit, best.plantId, best.fruitId or "")
-            cachedBestHarvest = nil
-            cleanupFiredSetIfNeeded(now)
-            return
-        end
-    end
 
     if autoHarvestOn() then
         for plantId, plantData in pairs(trackedPlants) do
@@ -4178,22 +4217,15 @@ function stealFruit(fruit, ownerUserId, sessionId)
 
     local fruitCountBefore = getFruitCount()
     tpInstant(stealPos)
-    local deadline = os.clock() + STEAL_HOLD_TIMEOUT
-    local lastNet = 0
 
-    while os.clock() < deadline do
+    for _ = 1, 4 do
         if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then break end
-        if isStealComplete(fruit, fruitCountBefore) then break end
-        if not fruit.Parent then break end
-        local now = os.clock()
-        if now - lastNet >= STEAL_NET_GAP then
-            local prompt = getStealPrompt(fruit)
-            if prompt then fireProximityPromptFast(prompt) end
-            safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
-            safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
-            lastNet = now
-        end
-        task.wait(STEAL_TICK)
+        if isStealComplete(fruit, fruitCountBefore) or not fruit.Parent then break end
+        local prompt = getStealPrompt(fruit)
+        if prompt then fireProximityPromptFast(prompt) end
+        safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
+        safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
+        task.wait(0.05)
     end
 
     if not autoStealOn() or sessionId ~= stealSessionId then return false end
@@ -4214,11 +4246,8 @@ function tryAutoSteal()
     stealBusy = true
     local sessionId = stealSessionId
     task.spawn(function()
-        movementBypass = true
-        gardenActionLock = true
-        task.wait(0.02)
         if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then
-            finishStealSession(sessionId, false)
+            stealBusy = false
             return
         end
 
@@ -4244,11 +4273,14 @@ function tryAutoSteal()
                 if stealFruit(fruit, uid, sessionId) then
                     stolenTotal += 1
                 end
-                task.wait(0.03)
             end
         end
 
-        finishStealSession(sessionId, stolenTotal > 0)
+        if stolenTotal > 0 then returnToGardenAfterSteal() end
+        stealBusy = false
+        movementBypass = false
+        gardenActionLock = false
+        gardenActionLockSince = 0
     end)
 end
 
@@ -4349,14 +4381,8 @@ function isNightTime()
 end
 
 function tryAntiStealGuard()
-    if not genv.ftgs_AntiStealGuard then return end
-    if not isNightTime() then return end
-    local hrp, cf = getRoot(), getPlotCenterCFrame()
-    if hrp and cf then
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.CFrame = cf + Vector3.new(0, 3, 0)
-    end
+    if not genv.ftgs_AntiStealGuard or not isNightTime() then return end
+    if not hasIntruderOnPlot() then return end
 end
 
 function scanServerForPet(petName)
@@ -5370,46 +5396,12 @@ function applyMovement()
     if hum.JumpPower ~= desiredJumpPower then hum.JumpPower = desiredJumpPower end
 end
 
-function applyMovementBypass(dt)
-    if not genv.ftgs_BypassMovement or desiredWalkSpeed <= 16 then return end
-    if gardenActionLock then
-        if gardenActionLockSince <= 0 then gardenActionLockSince = os.clock() end
-        if not stealBusy and not isCatchingPet and not collectingMutation and not sprinklerBusy and not wateringBusy and not plantingBusy
-            and os.clock() - gardenActionLockSince > GARDEN_LOCK_MAX then
-            gardenActionLock = false
-            movementBypass = false
-            gardenActionLockSince = 0
-        end
-    else
-        gardenActionLockSince = 0
-    end
-    if genv.ftgs_FakeLag or movementBypass or gardenActionLock or isCatchingPet or stealBusy or collectingMutation or plantingBusy then return end
+function applyMovementBypass(_dt)
+    if not genv.ftgs_BypassMovement then return end
     local now = os.clock()
-    if now - lastMovementBypassAt < MOVEMENT_BYPASS_INTERVAL then return end
+    if now - lastMovementBypassAt < 0.12 then return end
     lastMovementBypassAt = now
-    local hum = getHumanoid()
-    local hrp = getRoot()
-    if not hum or not hrp then return end
-    dt = math.clamp(dt or 0.016, 0.001, 0.05)
     applyMovement()
-    local dir = hum.MoveDirection
-    if dir.Magnitude <= 0.05 then
-        lastClientMovePos = hrp.Position
-        lastKnownMoveCF = hrp.CFrame
-        return
-    end
-    local flat = Vector3.new(dir.X, 0, dir.Z)
-    if flat.Magnitude <= 0.01 then return end
-    flat = flat.Unit
-    local speed = math.min(desiredWalkSpeed, 120)
-    local step = speed * dt
-    local targetPos = hrp.Position + flat * step
-    local vel = Vector3.new(flat.X * speed, hrp.AssemblyLinearVelocity.Y, flat.Z * speed)
-    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.05, 0), targetPos + flat)
-    hrp.AssemblyLinearVelocity = vel
-    hrp.AssemblyAngularVelocity = Vector3.zero
-    lastClientMovePos = hrp.Position
-    lastKnownMoveCF = hrp.CFrame
 end
 
 function setupAntiKnockbackChar(char)
@@ -5723,10 +5715,10 @@ function tryCollectMutationSeedsOnce()
         local target = spawn
         while autoCollectMutationOn() and target and target.Parent do
             local pos = getMutationSpawnPosition(target)
-            if pos then stickToPosition(pos) end
+            if pos then tpInstant(pos) end
             local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt then fireProximityPromptFast(prompt) end
-            task.wait(0.08)
+            task.wait(0.12)
         end
         if hum then hum.PlatformStand = false end
         movementBypass = false
@@ -6117,7 +6109,7 @@ function buildHubMainTabs()
 MainTab = Window:Tab({ Title = "Main", Icon = "home" })
 MainTab:Section({ Title = "Farm" })
 makeToggle(MainTab, "Auto Harvest", "Collect ripe fruit (filters below)", "ftgs_AutoHarvest")
-makeToggle(MainTab, "Auto Harvest Best", "Harvest highest value fruit in your garden", "ftgs_AutoHarvestBest")
+makeToggle(MainTab, "Auto Harvest Best", "Harvest highest value ripe fruit (0.01s/tick)", "ftgs_AutoHarvestBest")
 MainTab:Input({ Title = "Harvest max weight (kg)", Value = tostring(harvestMaxWeight), Placeholder = "0 = off, 100 = under 100kg only", Callback = function(v)
     harvestMaxWeight = math.max(0, tonumber(v) or 0)
 end })
@@ -6298,7 +6290,7 @@ SettingsTab:Button({ Title = "Redeem TEAMGREENBEAN", Icon = "gift", Callback = f
 end })
 SettingsTab:Slider({ Title = "Walk Speed", Step = 1, Value = { Min = 16, Max = 250, Default = 16 }, Callback = function(v) desiredWalkSpeed = v applyMovement() end })
 SettingsTab:Slider({ Title = "Jump Power", Step = 1, Value = { Min = 50, Max = 500, Default = 50 }, Callback = function(v) desiredJumpPower = v applyMovement() end })
-makeToggle(SettingsTab, "Bypass Movement AC", "bypass detected movement anti cheat", "ftgs_BypassMovement")
+makeToggle(SettingsTab, "Bypass Movement AC", "Keep custom WalkSpeed/Jump (no CFrame snap)", "ftgs_BypassMovement")
 SettingsTab:Toggle({ Title = "Anti Hit", Desc = "no knockback if someone hit you", Default = genv.ftgs_AntiHit or false, Callback = function(s)
     genv.ftgs_AntiHit = s
     if s and LocalPlayer.Character then setupAntiKnockbackChar(LocalPlayer.Character) end
@@ -6402,10 +6394,18 @@ function safeLoop(fn)
     xpcall(fn, noopErr)
 end
 
--- Harvest loop: 0.01s = 1 collect per tick (Auto Harvest + Auto Harvest Best share one loop)
+-- Harvest loop: normal harvest
 task.spawn(function()
     while true do
-        if autoHarvestOn() or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
+        if autoHarvestOn() then safeLoop(tryHarvestTick) end
+        task.wait(COOLDOWN.Harvest)
+    end
+end)
+
+-- Harvest Best: physical scan, highest value only, 0.01s = 1 fruit
+task.spawn(function()
+    while true do
+        if genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestBestTick) end
         task.wait(COOLDOWN.Harvest)
     end
 end)
@@ -6449,16 +6449,19 @@ end)
 hubLoop(function()
     while true do
         local night = isNightTime()
-        if stealWasNight and not night and autoStealOn() then
+        if night then
+            stealDawnReturnDone = false
+        elseif stealWasNight and autoStealOn() and not stealDawnReturnDone then
+            stealDawnReturnDone = true
             stealSessionId += 1
             stealBusy = false
             movementBypass = false
             gardenActionLock = false
-            task.wait(0.05)
-            returnToGardenOnce()
+            gardenActionLockSince = 0
+            returnToGardenAfterSteal()
         end
         stealWasNight = night and autoStealOn()
-        task.wait(0.4)
+        task.wait(0.5)
     end
 end)
 
@@ -6609,8 +6612,16 @@ end)
 
 Services.RunService.Heartbeat:Connect(function(dt)
     safeLoop(function()
-        if hubKeyUnlocked and (desiredWalkSpeed ~= 16 or desiredJumpPower ~= 50) then applyMovement() end
-        if hubKeyUnlocked then applyMovementBypass(dt) end
+        if not hubKeyUnlocked then return end
+        if genv.ftgs_BypassMovement then
+            applyMovementBypass(dt)
+        elseif desiredWalkSpeed ~= 16 or desiredJumpPower ~= 50 then
+            local now = os.clock()
+            if now - lastMovementBypassAt >= 0.25 then
+                lastMovementBypassAt = now
+                applyMovement()
+            end
+        end
     end)
 end)
 
