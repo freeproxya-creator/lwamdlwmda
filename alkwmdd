@@ -854,7 +854,7 @@ genv.ftgs_AutoHarvestBest = false
 genv.ftgs_Kaitun_AutoPlantAll = false
 genv.ftgs_Kaitun_AutoBuyAllSeed = false
 genv.ftgs_Kaitun_AutoBuyAllGear = false
-genv.ftgs_Kaitun_AutoHarvestBest = false
+genv.ftgs_Kaitun_AutoHarvest = false
 genv.ftgs_Kaitun_AutoSellAll = false
 genv.ftgs_Kaitun_AutoBuyAllPet = false
 genv.ftgs_Kaitun_AutoExpand = false
@@ -1989,6 +1989,7 @@ TRANSLATE_LANG_CODES = {
 
 selectedBuySeeds, selectedBuyGears = {}, {}
 selectedPlantSeeds, selectedShovelSeeds, selectedSprinklers, selectedPets = { Carrot = true }, { Carrot = true }, { ["Super Sprinkler"] = true }, { Unicorn = true }
+kaitunPlantRarities, kaitunPetRarities = {}, {}
 mailUsername, mailSeedName, mailGearName = "", "Carrot", GearNames[1] or ""
 mailSeedAmount, mailGearAmount, mailMessage = 1, 0, "NTMT HUB"
 selectedFindPet = "Unicorn"
@@ -2893,7 +2894,9 @@ function matchesPet(species, size, target)
 end
 
 function matchesAnySelectedPet(species, size)
-    if genv.ftgs_Kaitun_AutoBuyAllPet then return true end
+    if genv.ftgs_Kaitun_AutoBuyAllPet then
+        return petMatchesRarityFilter(species, kaitunPetRarities)
+    end
     if not setHasAny(selectedPets) then return false end
     for petName in selectedPets do
         if matchesPet(species, size, petName) then return true end
@@ -3102,10 +3105,21 @@ function consumeFreePlantSpot()
         table.remove(cachedFreePlantSpots, 1)
     end
 end
+function applyKaitunPlantRaritiesToSelection()
+    if not genv.ftgs_Kaitun_AutoPlantAll then return end
+    for _, name in PlantSeedNames do
+        if seedMatchesRarityFilter(name, kaitunPlantRarities) then
+            selectedPlantSeeds[name] = true
+        else
+            selectedPlantSeeds[name] = nil
+        end
+    end
+end
+
 function syncKaitunToggles()
     if genv.ftgs_Kaitun_AutoBuyAllSeed then genv.ftgs_AutoBuyAllSeed = true end
     if genv.ftgs_Kaitun_AutoBuyAllGear then genv.ftgs_AutoBuyAllGear = true end
-    if genv.ftgs_Kaitun_AutoHarvestBest then genv.ftgs_AutoHarvestBest = true end
+    if genv.ftgs_Kaitun_AutoHarvest then genv.ftgs_AutoHarvest = true end
     if genv.ftgs_Kaitun_AutoSellAll then genv.ftgs_AutoSellEverytime = true end
     if genv.ftgs_Kaitun_AutoExpand then genv.ftgs_AutoExpand = true end
     if genv.ftgs_Kaitun_AutoCollectMutation then genv.ftgs_AutoCollectMutation = true end
@@ -3114,7 +3128,7 @@ function syncKaitunToggles()
     if genv.ftgs_Kaitun_AutoBuyAllPet then genv.ftgs_AutoBuyPet = true end
     if genv.ftgs_Kaitun_AutoPlantAll then
         genv.ftgs_AutoPlant = true
-        for _, name in PlantSeedNames do selectedPlantSeeds[name] = true end
+        applyKaitunPlantRaritiesToSelection()
     end
 end
 function getSeedPrice(name)
@@ -3688,6 +3702,26 @@ function tryAutoWater()
     end)
 end
 
+function equipShovelForAction()
+    local shovel, shovelName = findShovelTool()
+    if not shovel then
+        shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
+    end
+    if not shovel then return nil, nil end
+    local hum = getHumanoid()
+    if hum and shovel.Parent ~= LocalPlayer.Character then
+        xpcall(function() hum:EquipTool(shovel) end, noopErr)
+        task.wait(0.3)
+    end
+    shovel, shovelName = findShovelTool()
+    if not shovel then
+        shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
+    end
+    if not shovel then return nil, nil end
+    shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
+    return shovel, shovelName
+end
+
 function tryShovel()
     if not genv.ftgs_AutoShovel or shovelBusy then return end
     if not setHasAny(selectedShovelSeeds) then return end
@@ -3696,9 +3730,6 @@ function tryShovel()
     refreshOwnerPlot()
     local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
     if not pf then return end
-    local shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
-    if not shovel then return end
-    shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
     for _, pl in pf:GetChildren() do
         local pid = pl:GetAttribute("PlantId")
         local crop = pl:GetAttribute("SeedName") or pl:GetAttribute("CorePartName") or pl:GetAttribute("PlantName")
@@ -3706,19 +3737,22 @@ function tryShovel()
             lastShovel = os.clock()
             shovelBusy = true
             task.spawn(function()
-                equipTool(shovel, true)
-                shovel, shovelName = findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
+                local shovel, shovelName = equipShovelForAction()
                 if not shovel then shovelBusy = false return end
-                shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
                 local ok, pos = pcall(function() return pl:GetPivot().Position end)
                 if ok and pos then
                     if not lastShovelPos or (pos - lastShovelPos).Magnitude > 10 then
                         tpInstant(pos)
                         lastShovelPos = pos
+                        task.wait(0.05)
                     end
                 end
+                shovel, shovelName = findShovelTool() or findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
+                if not shovel then shovelBusy = false return end
+                shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
                 safeNetCall(Net.Shovel and Net.Shovel.UseShovel, pid, "", shovelName, shovel)
                 if type(shovel.Activate) == "function" then xpcall(function() shovel:Activate() end, noopErr) end
+                task.wait(COOLDOWN.Shovel)
                 shovelBusy = false
             end)
             return
@@ -5861,8 +5895,19 @@ multiDropdown(AutoTab, "Select Pets", PET_LIST, selectedPets, false)
 
 KaitunTab = Window:Tab({ Title = "Kaitun", Icon = "zap" })
 KaitunTab:Section({ Title = "Farm" })
-makeToggle(KaitunTab, "Auto Plant All Seed", "uses Auto Plant + all seeds", "ftgs_Kaitun_AutoPlantAll")
-makeToggle(KaitunTab, "Auto Harvest Best", "uses Main tab harvest best", "ftgs_Kaitun_AutoHarvestBest")
+makeToggle(KaitunTab, "Auto Plant", "uses Auto Plant (Main logic) by rarity", "ftgs_Kaitun_AutoPlantAll")
+KaitunTab:Dropdown({
+    Title = "Plant Rarity",
+    Values = RARITY_TIER_LIST,
+    Multi = true,
+    AllowNone = true,
+    Callback = function(sel)
+        parseMultiSelect(sel, kaitunPlantRarities)
+        applyKaitunPlantRaritiesToSelection()
+        syncKaitunToggles()
+    end,
+})
+makeToggle(KaitunTab, "Auto Harvest", "uses Main auto harvest (not best)", "ftgs_Kaitun_AutoHarvest")
 makeToggle(KaitunTab, "Auto Expand Garden", "uses Main tab expand", "ftgs_Kaitun_AutoExpand")
 KaitunTab:Section({ Title = "Shop" })
 makeToggle(KaitunTab, "Auto Buy All Seed", "uses Shop buy all seed", "ftgs_Kaitun_AutoBuyAllSeed")
@@ -5871,7 +5916,14 @@ KaitunTab:Section({ Title = "Sell & Steal" })
 makeToggle(KaitunTab, "Auto Sell All", "uses Main auto sell", "ftgs_Kaitun_AutoSellAll")
 makeToggle(KaitunTab, "Auto Steal", "uses Automation auto steal", "ftgs_Kaitun_AutoSteal")
 KaitunTab:Section({ Title = "Pet" })
-makeToggle(KaitunTab, "Auto Buy All Pet", "uses Auto Buy Pet for any wild pet", "ftgs_Kaitun_AutoBuyAllPet")
+makeToggle(KaitunTab, "Auto Buy All Pet", "uses Auto Buy Pet by rarity", "ftgs_Kaitun_AutoBuyAllPet")
+KaitunTab:Dropdown({
+    Title = "Pet Rarity",
+    Values = RARITY_TIER_LIST,
+    Multi = true,
+    AllowNone = true,
+    Callback = function(sel) parseMultiSelect(sel, kaitunPetRarities) end,
+})
 KaitunTab:Section({ Title = "Collect" })
 makeToggle(KaitunTab, "Auto Collect Rainbow/Gold/Mega Seed", "uses Automation collect seeds", "ftgs_Kaitun_AutoCollectMutation")
 makeToggle(KaitunTab, "Auto Collect Item Drop", "uses Automation collect drops", "ftgs_Kaitun_AutoCollectDrops")
