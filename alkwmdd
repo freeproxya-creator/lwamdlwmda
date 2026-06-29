@@ -796,9 +796,10 @@ NEAR_PLAYER_DIST = 45
 PLOT_EDGE_MARGIN = 65
 SPRINKLER_MIN_DIST = 8
 STEAL_BATCH = 3
-STEAL_FRUIT_ATTEMPTS = 12
-STEAL_ATTEMPT_WAIT = 0.006
-STEAL_TARGET_CACHE_TTL = 0.12
+STEAL_FRUIT_ATTEMPTS = 24
+STEAL_ATTEMPT_WAIT = 0
+STEAL_TARGET_CACHE_TTL = 0.08
+STEAL_SESSION_GAP = 0.025
 PLANT_BATCH = 6
 KAITUN_PLANT_BATCH = 16
 DROP_SCAN_INTERVAL = 0.75
@@ -2033,6 +2034,7 @@ antiKbConn = nil
 ANTI_KB_PERCENT = 0.05
 translateBusy = false
 lastClientMovePos = nil
+bypassAnchorPos = nil
 hitboxOriginalProps, defendHitboxActive = {}, false
 translateLanguage = "English"
 translationRegistry, translationCache = {}, {}
@@ -2642,10 +2644,13 @@ function getGardenCenterPos()
     return savedPlotCenter
 end
 
-function returnToGardenAfterSteal()
+function teleportToGardenCenter()
+    refreshOwnerPlot()
     local pos = getGardenCenterPos()
     if not pos then return end
     local hrp = getRoot()
+    local hum = getHumanoid()
+    if hum then hum.PlatformStand = false end
     if hrp then
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
@@ -2654,17 +2659,20 @@ function returnToGardenAfterSteal()
     lastStealReturn = os.clock()
 end
 
-function handleStealDawnReturn()
-    if stealDawnReturnDone or not autoStealOn() then return end
-    if isNightTime() then return end
-    stealDawnReturnDone = true
-    stealSessionId += 1
-    stealBusy = false
+function returnToGardenAfterSteal()
+    teleportToGardenCenter()
     movementBypass = false
     gardenActionLock = false
     gardenActionLockSince = 0
-    local hum = getHumanoid()
-    if hum then hum.PlatformStand = false end
+end
+
+function handleStealDawnReturn()
+    if stealDawnReturnDone then return end
+    if isNightTime() then return end
+    if not autoStealOn() then return end
+    stealDawnReturnDone = true
+    cancelStealAction()
+    gardenActionLockSince = 0
     returnToGardenAfterSteal()
 end
 
@@ -2677,6 +2685,8 @@ function setupStealDawnWatcher()
         if night then stealDawnReturnDone = false end
         lastStealPhaseNight = night
     end
+    lastStealPhaseNight = isNightTime()
+    onPhaseMaybeDay()
     xpcall(function()
         Services.Lighting:GetPropertyChangedSignal("ClockTime"):Connect(onPhaseMaybeDay)
     end, noopErr)
@@ -4267,7 +4277,7 @@ function findMutationSeedSpawn()
 end
 
 function stealFruit(fruit, ownerUserId, sessionId)
-    if not autoStealOn() or sessionId ~= stealSessionId then return false end
+    if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then return false end
     if not fruit or not fruit.Parent then return false end
     local stealPos, uid, plantId, fruitId = resolveStealTarget(fruit, ownerUserId)
     if not stealPos or not plantId then return false end
@@ -4278,19 +4288,12 @@ function stealFruit(fruit, ownerUserId, sessionId)
     local fruitCountBefore = getFruitCount()
     tpInstant(stealPos)
 
-    for _ = 1, STEAL_FRUIT_ATTEMPTS do
+    for attempt = 1, STEAL_FRUIT_ATTEMPTS do
         if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then break end
         if isStealComplete(fruit, fruitCountBefore) or not fruit.Parent then break end
+        if attempt == 1 or attempt % 4 == 0 then tpInstant(stealPos) end
         local prompt = getStealPrompt(fruit)
-        if prompt then
-            local fn = fireproximityprompt or rawget(genv, "fireproximityprompt")
-            if type(fn) == "function" then
-                xpcall(fn, noopErr, prompt)
-                xpcall(fn, noopErr, prompt, 0)
-            end
-        end
-        safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
-        safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
+        if prompt then fireProximityPromptFast(prompt) end
         safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
         safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
         if STEAL_ATTEMPT_WAIT > 0 then task.wait(STEAL_ATTEMPT_WAIT) end
@@ -4309,8 +4312,7 @@ function stealFruit(fruit, ownerUserId, sessionId)
 end
 
 function tryAutoSteal()
-    if not autoStealOn() or stealBusy or isInventoryFull() then return end
-    if not isNightTime() then return end
+    if not autoStealOn() or stealBusy or isInventoryFull() or not isNightTime() then return end
     stealBusy = true
     local sessionId = stealSessionId
     task.spawn(function()
@@ -4319,36 +4321,51 @@ function tryAutoSteal()
             return
         end
 
+        movementBypass = true
+        gardenActionLock = true
         local stolenTotal = 0
-        local targets = collectAllStealTargets()
-        for _, t in ipairs(targets) do
-            if stolenTotal >= STEAL_BATCH then break end
-            if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then break end
-            if isInventoryFull() then break end
 
-            local plot = t.plot
-            local owner = t.owner
-            if owner and isOwnerInPlot(plot, owner) then continue end
-            if owner and not plotUnlocked(owner) then continue end
-            local uid = owner and owner.UserId or t.ownerUserId
-            local fruits = getStealableFruitsOnPlot(plot, STEAL_BATCH - stolenTotal)
+        while autoStealOn() and sessionId == stealSessionId and not isInventoryFull() and isNightTime() do
+            local targets = collectAllStealTargets()
+            if #targets == 0 then break end
 
-            for _, fruit in fruits do
+            local gotOne = false
+            for _, t in ipairs(targets) do
                 if stolenTotal >= STEAL_BATCH then break end
                 if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then break end
                 if isInventoryFull() then break end
-                if owner and isOwnerInPlot(plot, owner) then break end
-                if stealFruit(fruit, uid, sessionId) then
-                    stolenTotal += 1
+
+                local plot = t.plot
+                local owner = t.owner
+                if owner and isOwnerInPlot(plot, owner) then continue end
+                if owner and not plotUnlocked(owner) then continue end
+                local uid = owner and owner.UserId or t.ownerUserId
+                local fruits = getStealableFruitsOnPlot(plot, STEAL_BATCH - stolenTotal)
+
+                for _, fruit in ipairs(fruits) do
+                    if stolenTotal >= STEAL_BATCH then break end
+                    if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then break end
+                    if isInventoryFull() then break end
+                    if owner and isOwnerInPlot(plot, owner) then break end
+                    if stealFruit(fruit, uid, sessionId) then
+                        stolenTotal += 1
+                        gotOne = true
+                    end
                 end
+            end
+
+            if stolenTotal >= STEAL_BATCH then
+                teleportToGardenCenter()
+                stolenTotal = 0
+                cachedStealTargets = nil
+                lastStealTargetScan = 0
+                task.wait(STEAL_SESSION_GAP)
+            elseif not gotOne then
+                break
             end
         end
 
-        returnToGardenAfterSteal()
-        stealBusy = false
-        movementBypass = false
-        gardenActionLock = false
-        gardenActionLockSince = 0
+        finishStealSession(sessionId, true)
     end)
 end
 
@@ -5450,7 +5467,6 @@ function bindCharacterMovement(char)
         if movementHumConn then movementHumConn:Disconnect() end
         if movementJumpConn then movementJumpConn:Disconnect() end
         movementHumConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-            if genv.ftgs_BypassMovement and desiredWalkSpeed > 16 then return end
             if hum.WalkSpeed ~= desiredWalkSpeed then hum.WalkSpeed = desiredWalkSpeed end
         end)
         movementJumpConn = hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
@@ -5469,24 +5485,20 @@ end
 
 function applyMovementBypass(_dt)
     if not genv.ftgs_BypassMovement then return end
-    if genv.ftgs_FakeLag then return end
+    if genv.ftgs_FakeLag or movementBypass or gardenActionLock or isCatchingPet or stealBusy or collectingMutation then return end
     local hum = getHumanoid()
     local hrp = getRoot()
     if not hum or not hrp then return end
-    local now = os.clock()
-    if now - lastMovementBypassAt < 0.03 then return end
-    lastMovementBypassAt = now
-    hum.UseJumpPower = true
+    applyMovement()
     if hum.PlatformStand then hum.PlatformStand = false end
-    if hum.WalkSpeed ~= desiredWalkSpeed then hum.WalkSpeed = desiredWalkSpeed end
-    if hum.JumpPower ~= desiredJumpPower then hum.JumpPower = desiredJumpPower end
     local dir = hum.MoveDirection
     if dir.Magnitude <= 0.05 then return end
     local flat = Vector3.new(dir.X, 0, dir.Z)
     if flat.Magnitude <= 0.01 then return end
     flat = flat.Unit
-    local speed = math.min(desiredWalkSpeed, 100)
-    hrp.AssemblyLinearVelocity = Vector3.new(flat.X * speed, hrp.AssemblyLinearVelocity.Y, flat.Z * speed)
+    local speed = desiredWalkSpeed
+    local vy = hrp.AssemblyLinearVelocity.Y
+    hrp.AssemblyLinearVelocity = Vector3.new(flat.X * speed, vy, flat.Z * speed)
     hrp.AssemblyAngularVelocity = Vector3.zero
 end
 
@@ -6376,7 +6388,7 @@ SettingsTab:Button({ Title = "Redeem TEAMGREENBEAN", Icon = "gift", Callback = f
 end })
 SettingsTab:Slider({ Title = "Walk Speed", Step = 1, Value = { Min = 16, Max = 250, Default = 16 }, Callback = function(v) desiredWalkSpeed = v applyMovement() end })
 SettingsTab:Slider({ Title = "Jump Power", Step = 1, Value = { Min = 50, Max = 500, Default = 50 }, Callback = function(v) desiredJumpPower = v applyMovement() end })
-makeToggle(SettingsTab, "Bypass Movement AC", "Velocity boost — no CFrame snap back", "ftgs_BypassMovement")
+makeToggle(SettingsTab, "Bypass Movement AC", "Velocity boost — no CFrame snap", "ftgs_BypassMovement")
 SettingsTab:Toggle({ Title = "Anti Hit", Desc = "no knockback if someone hit you", Default = genv.ftgs_AntiHit or false, Callback = function(s)
     genv.ftgs_AntiHit = s
     if s and LocalPlayer.Character then setupAntiKnockbackChar(LocalPlayer.Character) end
@@ -6537,19 +6549,20 @@ hubLoop(function()
         local night = isNightTime()
         if night then
             stealDawnReturnDone = false
-        elseif lastStealPhaseNight and autoStealOn() then
+        elseif lastStealPhaseNight then
             handleStealDawnReturn()
         end
         lastStealPhaseNight = night
-        task.wait(0.15)
+        task.wait(0.12)
     end
 end)
 
 hubLoop(function()
     while true do
         if autoStealOn() and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
+        if autoStealOn() and not isNightTime() and not stealDawnReturnDone then handleStealDawnReturn() end
         flushStealConfigIfDue()
-        task.wait(stealBusy and 0.03 or 0.08)
+        task.wait(stealBusy and 0.02 or 0.05)
     end
 end)
 
@@ -6690,17 +6703,13 @@ hubLoop(function()
     end
 end)
 
-Services.RunService.Heartbeat:Connect(function(dt)
+Services.RunService.RenderStepped:Connect(function(dt)
     safeLoop(function()
         if not hubKeyUnlocked then return end
         if genv.ftgs_BypassMovement then
             applyMovementBypass(dt)
         elseif desiredWalkSpeed ~= 16 or desiredJumpPower ~= 50 then
-            local now = os.clock()
-            if now - lastMovementBypassAt >= 0.25 then
-                lastMovementBypassAt = now
-                applyMovement()
-            end
+            applyMovement()
         end
     end)
 end)
