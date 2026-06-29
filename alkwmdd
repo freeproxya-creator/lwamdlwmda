@@ -781,7 +781,7 @@ COOLDOWN = { Harvest = 0.01, Plant = 0.01, Buy = 0.01, Expand = 8, Sell = 0.5, S
 PLANT_MIN_DIST = 3
 PLANT_GRID_STEP = 6
 PLANT_GRID_MIN_DIST = 6
-FREE_PLANT_BUILD_TTL = 1.2
+FREE_PLANT_BUILD_TTL = 2.5
 PLANT_CENTER_AVOID = 18
 PET_DEFEND_RADIUS = 22
 PET_DEFEND_PLAYER_RANGE = 32
@@ -796,8 +796,12 @@ NEAR_PLAYER_DIST = 45
 PLOT_EDGE_MARGIN = 65
 SPRINKLER_MIN_DIST = 8
 STEAL_BATCH = 3
-STEAL_HOLD_TIMEOUT = 4
-STEAL_TICK = 0.02
+STEAL_HOLD_TIMEOUT = 3
+STEAL_TICK = 0.08
+STEAL_NET_GAP = 0.14
+STEAL_TP_DRIFT = 10
+PLANT_BATCH = 4
+KAITUN_PLANT_BATCH = 12
 WATERING_CAN_LIST = { "Super Watering Can", "Legendary Watering Can", "Rare Watering Can", "Uncommon Watering Can", "Common Watering Can" }
 SHOVEL_BATCH = 10
 MAIL_MAX_PER_GIFT = 20
@@ -864,6 +868,18 @@ genv.ftgs_Kaitun_AutoExpand = false
 genv.ftgs_Kaitun_AutoCollectMutation = false
 genv.ftgs_Kaitun_AutoCollectDrops = false
 genv.ftgs_Kaitun_AutoSteal = false
+
+function ftgsOn(key) return genv[key] == true end
+function autoStealOn() return ftgsOn("ftgs_AutoSteal") or ftgsOn("ftgs_Kaitun_AutoSteal") end
+function autoPlantOn() return ftgsOn("ftgs_AutoPlant") or ftgsOn("ftgs_Kaitun_AutoPlantAll") end
+function autoHarvestOn() return ftgsOn("ftgs_AutoHarvest") or ftgsOn("ftgs_Kaitun_AutoHarvest") end
+function autoSellAllOn() return ftgsOn("ftgs_AutoSellEverytime") or ftgsOn("ftgs_Kaitun_AutoSellAll") end
+function autoBuyAllSeedOn() return ftgsOn("ftgs_AutoBuyAllSeed") or ftgsOn("ftgs_Kaitun_AutoBuyAllSeed") end
+function autoBuyAllGearOn() return ftgsOn("ftgs_AutoBuyAllGear") or ftgsOn("ftgs_Kaitun_AutoBuyAllGear") end
+function autoBuyPetOn() return ftgsOn("ftgs_AutoBuyPet") or ftgsOn("ftgs_Kaitun_AutoBuyAllPet") end
+function autoExpandOn() return ftgsOn("ftgs_AutoExpand") or ftgsOn("ftgs_Kaitun_AutoExpand") end
+function autoCollectMutationOn() return ftgsOn("ftgs_AutoCollectMutation") or ftgsOn("ftgs_Kaitun_AutoCollectMutation") end
+function autoCollectDropsOn() return ftgsOn("ftgs_AutoCollectDrops") or ftgsOn("ftgs_Kaitun_AutoCollectDrops") end
 autoClickSpeed = 0.04
 hubKeyUnlocked, hubTabsBuilt, hubKeyDraft, hubKeyInputEl = false, false, "", nil
 weatherPredictPara, weatherLivePara = nil, nil
@@ -2048,6 +2064,15 @@ OCCUPIED_CACHE_TTL = 0.2
 cachedFreePlantSpots = nil
 lastFreePlantBuild = 0
 lastShovelPos = nil
+kaitunCurrentPlantSeed = nil
+godModeHealthConn = nil
+godModeStateConn = nil
+godModeBoundHum = nil
+stealConfigDirty = false
+stealConfigSaveAt = 0
+cachedStealTargets = nil
+lastStealTargetScan = 0
+STEAL_TARGET_CACHE_TTL = 0.35
 
 function invalidateFarmCaches()
     cachedBestHarvest = nil
@@ -2467,24 +2492,30 @@ function tryUnfavoriteAllOnce()
 end
 
 function handleToggleOff(key)
-    if key == "ftgs_AutoSteal" then cancelStealAction()
+    if key == "ftgs_AutoSteal" or key == "ftgs_Kaitun_AutoSteal" then
+        if not autoStealOn() then cancelStealAction() end
     elseif key == "ftgs_FakeLag" then setFakeLag(false)
     elseif key == "ftgs_FruitESP" then clearFruitEsp()
     elseif key == "ftgs_Fullbright" then setFullbright(false)
-    elseif key == "ftgs_AutoBuyPet" then
-        isCatchingPet = false
-        activeDefendPetPos = nil
-        movementBypass = false
-        gardenActionLock = false
-        local hum = getHumanoid()
-        if hum then hum.PlatformStand = false end
-    elseif key == "ftgs_AutoCollectMutation" then collectingMutation = false
-    elseif key == "ftgs_AutoPlant" then plantingBusy = false
-    elseif key == "ftgs_AutoCollectDrops" then dropsBusy = false
+    elseif key == "ftgs_AutoBuyPet" or key == "ftgs_Kaitun_AutoBuyAllPet" then
+        if not autoBuyPetOn() then
+            isCatchingPet = false
+            activeDefendPetPos = nil
+            movementBypass = false
+            gardenActionLock = false
+            local hum = getHumanoid()
+            if hum then hum.PlatformStand = false end
+        end
+    elseif key == "ftgs_AutoCollectMutation" or key == "ftgs_Kaitun_AutoCollectMutation" then
+        if not autoCollectMutationOn() then collectingMutation = false end
+    elseif key == "ftgs_AutoPlant" or key == "ftgs_Kaitun_AutoPlantAll" then
+        if not autoPlantOn() then plantingBusy = false kaitunCurrentPlantSeed = nil end
+    elseif key == "ftgs_AutoCollectDrops" or key == "ftgs_Kaitun_AutoCollectDrops" then
+        if not autoCollectDropsOn() then dropsBusy = false end
     elseif key == "ftgs_AutoShovel" then shovelBusy = false
     elseif key == "ftgs_AutoSprinkler" then sprinklerBusy = false
     elseif key == "ftgs_AutoWater" then wateringBusy = false
-    end
+    elseif key == "ftgs_GodMode" then clearGodMode() end
 end
 
 function sendAutoClick(count)
@@ -3159,18 +3190,37 @@ function applyKaitunPlantRaritiesToSelection()
 end
 
 function syncKaitunToggles()
-    if genv.ftgs_Kaitun_AutoBuyAllSeed then genv.ftgs_AutoBuyAllSeed = true end
-    if genv.ftgs_Kaitun_AutoBuyAllGear then genv.ftgs_AutoBuyAllGear = true end
-    if genv.ftgs_Kaitun_AutoHarvest then genv.ftgs_AutoHarvest = true end
-    if genv.ftgs_Kaitun_AutoSellAll then genv.ftgs_AutoSellEverytime = true end
-    if genv.ftgs_Kaitun_AutoExpand then genv.ftgs_AutoExpand = true end
-    if genv.ftgs_Kaitun_AutoCollectMutation then genv.ftgs_AutoCollectMutation = true end
-    if genv.ftgs_Kaitun_AutoCollectDrops then genv.ftgs_AutoCollectDrops = true end
-    if genv.ftgs_Kaitun_AutoSteal then genv.ftgs_AutoSteal = true end
-    if genv.ftgs_Kaitun_AutoBuyAllPet then genv.ftgs_AutoBuyPet = true end
-    if genv.ftgs_Kaitun_AutoPlantAll then
-        genv.ftgs_AutoPlant = true
-        applyKaitunPlantRaritiesToSelection()
+    if genv.ftgs_Kaitun_AutoPlantAll then applyKaitunPlantRaritiesToSelection() end
+end
+
+function pickKaitunPlantSeed()
+    if kaitunCurrentPlantSeed and selectedPlantSeeds[kaitunCurrentPlantSeed] then
+        local tool = findSeedToolByName(kaitunCurrentPlantSeed)
+        if tool then return kaitunCurrentPlantSeed, tool end
+        kaitunCurrentPlantSeed = nil
+    end
+    for _, name in PlantSeedNames do
+        if selectedPlantSeeds[name] then
+            local tool = findSeedToolByName(name)
+            if tool then
+                kaitunCurrentPlantSeed = name
+                return name, tool
+            end
+        end
+    end
+    kaitunCurrentPlantSeed = nil
+    return nil, nil
+end
+
+function markStealConfigDirty()
+    stealConfigDirty = true
+    stealConfigSaveAt = os.clock() + 2
+end
+
+function flushStealConfigIfDue()
+    if stealConfigDirty and os.clock() >= stealConfigSaveAt then
+        stealConfigDirty = false
+        saveConfig()
     end
 end
 function getSeedPrice(name)
@@ -3528,7 +3578,7 @@ function cleanupFiredSetIfNeeded(now)
 end
 
 function tryHarvestTick()
-    if not genv.ftgs_AutoHarvest and not genv.ftgs_AutoHarvestBest then return end
+    if not autoHarvestOn() and not genv.ftgs_AutoHarvestBest then return end
     local now = os.clock()
     local n = 0
 
@@ -3550,7 +3600,7 @@ function tryHarvestTick()
         end
     end
 
-    if genv.ftgs_AutoHarvest then
+    if autoHarvestOn() then
         for plantId, plantData in pairs(trackedPlants) do
             if type(plantData) ~= "table" then continue end
             local fruits = plantData.Fruits
@@ -3583,9 +3633,9 @@ function tryHarvestTick()
 end
 
 function tryBuySeedsFast()
-    if not genv.ftgs_AutoBuySeed and not genv.ftgs_AutoBuyAllSeed then return end
+    if not genv.ftgs_AutoBuySeed and not autoBuyAllSeedOn() then return end
     local list = {}
-    if genv.ftgs_AutoBuyAllSeed then
+    if autoBuyAllSeedOn() then
         for _, ch in StockItems:GetChildren() do
             if ch:IsA("ValueBase") and ch.Value > 0 and not isExcludedPlantBuySeed(ch.Name) then
                 list[#list + 1] = ch.Name
@@ -3608,9 +3658,9 @@ function tryBuySeedsFast()
 end
 
 function tryBuyGearsFast()
-    if not genv.ftgs_AutoBuyGear and not genv.ftgs_AutoBuyAllGear then return end
+    if not genv.ftgs_AutoBuyGear and not autoBuyAllGearOn() then return end
     local list = {}
-    if genv.ftgs_AutoBuyAllGear then
+    if autoBuyAllGearOn() then
         for _, ch in GearStockItems:GetChildren() do if ch:IsA("ValueBase") and ch.Value > 0 then list[#list + 1] = ch.Name end end
     else for n in selectedBuyGears do list[#list + 1] = n end end
     local sheckles = getSheckles()
@@ -3625,23 +3675,39 @@ function tryBuyGearsFast()
 end
 
 function tryAutoPlant()
-    if not genv.ftgs_AutoPlant then return end
-    if os.clock() - lastPlant < COOLDOWN.Plant then return end
+    if not autoPlantOn() then return end
+    if plantingBusy then return end
     if not isInGardenActionRange() then return end
     if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
     if not setHasAny(selectedPlantSeeds) then return end
-    local seedName, tool = pickNextPlantSeed()
-    if not seedName or not tool then return end
-    local pos = getFreePlantSpot(true)
-    if not pos then return end
-    lastPlant = os.clock()
-    equipTool(tool, true)
-    tool = findSeedToolByName(seedName) or tool
-    safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool, OwnerPlot)
-    if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
-    consumeFreePlantSpot()
-    invalidateFarmCaches()
+
+    local kaitun = ftgsOn("ftgs_Kaitun_AutoPlantAll")
+    local batch = kaitun and KAITUN_PLANT_BATCH or PLANT_BATCH
+    plantingBusy = true
+    local planted = 0
+
+    for _ = 1, batch do
+        if not autoPlantOn() then break end
+        if os.clock() - lastPlant < COOLDOWN.Plant then break end
+        local seedName, tool = kaitun and pickKaitunPlantSeed() or pickNextPlantSeed()
+        if not seedName or not tool then break end
+        local pos = getFreePlantSpot(planted == 0)
+        if not pos then break end
+        lastPlant = os.clock()
+        equipTool(tool, true)
+        tool = findSeedToolByName(seedName) or tool
+        safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool, OwnerPlot)
+        if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
+        consumeFreePlantSpot()
+        planted += 1
+    end
+
+    if planted > 0 and planted >= batch then
+        cachedOccupied = nil
+        lastOccupiedScan = 0
+    end
+    plantingBusy = false
 end
 
 function trySprinkler()
@@ -3923,6 +3989,10 @@ function isPlotStealable(plot)
 end
 
 function collectAllStealTargets()
+    local now = os.clock()
+    if cachedStealTargets and now - lastStealTargetScan < STEAL_TARGET_CACHE_TTL then
+        return cachedStealTargets
+    end
     local targets = {}
     if not Gardens then return targets end
     for _, plot in Gardens:GetChildren() do
@@ -3944,6 +4014,8 @@ function collectAllStealTargets()
         if a.unowned ~= b.unowned then return a.unowned end
         return a.value > b.value
     end)
+    cachedStealTargets = targets
+    lastStealTargetScan = now
     return targets
 end
 
@@ -4006,7 +4078,7 @@ function findMutationSeedSpawn()
 end
 
 function stealFruit(fruit, ownerUserId, sessionId)
-    if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId then return false end
+    if not autoStealOn() or sessionId ~= stealSessionId then return false end
     if not fruit or not fruit.Parent then return false end
     local stealPos, uid, plantId, fruitId = resolveStealTarget(fruit, ownerUserId)
     if not stealPos or not plantId then return false end
@@ -4019,41 +4091,52 @@ function stealFruit(fruit, ownerUserId, sessionId)
     gardenActionLock = true
     tpInstant(stealPos)
     local deadline = os.clock() + STEAL_HOLD_TIMEOUT
+    local lastNet = 0
+    local lastTp = os.clock()
 
     while os.clock() < deadline do
-        if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId or not isNightTime() then break end
+        if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then break end
         if isStealComplete(fruit, fruitCountBefore) then break end
         if not fruit.Parent then break end
-        tpInstant(stealPos)
-        local prompt = getStealPrompt(fruit)
-        if prompt then fireProximityPromptFast(prompt) end
-        safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
-        safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
+        local now = os.clock()
+        if now - lastTp >= 0.35 then
+            local hrp = getRoot()
+            if hrp and flatDistXZ(hrp.Position, stealPos) > STEAL_TP_DRIFT then tpInstant(stealPos) end
+            lastTp = now
+        end
+        if now - lastNet >= STEAL_NET_GAP then
+            local prompt = getStealPrompt(fruit)
+            if prompt then fireProximityPromptFast(prompt) end
+            safeNetCall(Net.Steal and Net.Steal.BeginSteal, uid, plantId, fruitId)
+            safeNetCall(Net.Steal and Net.Steal.CompleteSteal)
+            lastNet = now
+        end
         task.wait(STEAL_TICK)
     end
 
     movementBypass = false
     gardenActionLock = false
 
-    if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId then return false end
+    if not autoStealOn() or sessionId ~= stealSessionId then return false end
 
     if isStealComplete(fruit, fruitCountBefore) then
         StolenFruits[#StolenFruits + 1] = { name = fruit.Name .. " (" .. tostring(calculateStealValue(fruit)) .. ")", time = os.time() }
-        saveConfig()
+        markStealConfigDirty()
+        cachedStealTargets = nil
+        lastStealTargetScan = 0
         return true
     end
     return false
 end
 
 function tryAutoSteal()
-    if not genv.ftgs_AutoSteal or stealBusy or isInventoryFull() then return end
+    if not autoStealOn() or stealBusy or isInventoryFull() then return end
     if not isNightTime() then return end
     stealBusy = true
     local sessionId = stealSessionId
     task.spawn(function()
-        safeNetCall(Net.Garden and Net.Garden.RequestGardens)
         task.wait(0.03)
-        if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then
+        if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then
             finishStealSession(sessionId, false)
             return
         end
@@ -4062,7 +4145,7 @@ function tryAutoSteal()
         local targets = collectAllStealTargets()
         for _, t in ipairs(targets) do
             if stolenTotal >= STEAL_BATCH then break end
-            if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then break end
+            if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then break end
             if isInventoryFull() then break end
 
             local plot = t.plot
@@ -4074,13 +4157,13 @@ function tryAutoSteal()
 
             for _, fruit in fruits do
                 if stolenTotal >= STEAL_BATCH then break end
-                if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then break end
+                if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then break end
                 if isInventoryFull() then break end
                 if owner and isOwnerInPlot(plot, owner) then break end
                 if stealFruit(fruit, uid, sessionId) then
                     stolenTotal += 1
                 end
-                task.wait(0.015)
+                task.wait(0.03)
             end
         end
 
@@ -4113,7 +4196,7 @@ function isRefTameable(refPart)
 end
 
 function tryBuyPet()
-    if not genv.ftgs_AutoBuyPet and not genv.ftgs_Kaitun_AutoBuyAllPet then return end
+    if not autoBuyPetOn() then return end
     initMapFolders()
     if not WildPetFolder then return end
     local candidates = {}
@@ -4486,13 +4569,56 @@ function buildGearShopText()
     return #lines > 0 and table.concat(lines, "\n") or "Waiting restock..."
 end
 
-function applyGodMode(char)
-    if not genv.ftgs_GodMode then return end
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+function clearGodMode(char)
+    if godModeHealthConn then godModeHealthConn:Disconnect() godModeHealthConn = nil end
+    if godModeStateConn then godModeStateConn:Disconnect() godModeStateConn = nil end
+    godModeBoundHum = nil
+    local hum = (char or LocalPlayer.Character) and (char or LocalPlayer.Character):FindFirstChildOfClass("Humanoid")
     if hum then
-        hum.MaxHealth = 999999999
-        hum.Health = hum.MaxHealth
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true) end)
+        if hum.MaxHealth > 1000 then
+            hum.MaxHealth = 100
+            hum.Health = math.min(hum.Health, hum.MaxHealth)
+        end
     end
+end
+
+function applyGodMode(char)
+    if not genv.ftgs_GodMode or not char then
+        clearGodMode(char)
+        return
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    if godModeBoundHum == hum and godModeHealthConn then return end
+    clearGodMode(char)
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        hum.BreakJointsOnDeath = false
+    end)
+    hum.MaxHealth = 999999999
+    hum.Health = hum.MaxHealth
+    godModeBoundHum = hum
+    godModeHealthConn = hum.HealthChanged:Connect(function(h)
+        if not genv.ftgs_GodMode then return end
+        if h < hum.MaxHealth then hum.Health = hum.MaxHealth end
+    end)
+    godModeStateConn = hum.StateChanged:Connect(function(_, new)
+        if not genv.ftgs_GodMode then return end
+        if new == Enum.HumanoidStateType.Dead then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+            hum.Health = hum.MaxHealth
+        end
+    end)
+end
+
+function maintainGodMode()
+    if not genv.ftgs_GodMode then return end
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if godModeBoundHum ~= hum then applyGodMode(LocalPlayer.Character) return end
+    if hum.MaxHealth < 999999999 then hum.MaxHealth = 999999999 end
+    if hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
 end
 
 function applyVisualMoney()
@@ -5509,7 +5635,7 @@ function getMutationSpawnPosition(spawn)
 end
 
 function tryCollectMutationSeedsOnce()
-    if not genv.ftgs_AutoCollectMutation or collectingMutation then return end
+    if not autoCollectMutationOn() or collectingMutation then return end
     local spawn = findMutationSeedSpawn()
     if not spawn then return end
     collectingMutation = true
@@ -5518,7 +5644,7 @@ function tryCollectMutationSeedsOnce()
         gardenActionLock = true
         local hum = getHumanoid()
         local target = spawn
-        while genv.ftgs_AutoCollectMutation and target and target.Parent do
+        while autoCollectMutationOn() and target and target.Parent do
             local pos = getMutationSpawnPosition(target)
             if pos then stickToPosition(pos) end
             local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -5550,12 +5676,12 @@ function trySellAll()
 end
 
 function trySellEverytime()
-    if not genv.ftgs_AutoSellEverytime then return end
+    if not autoSellAllOn() then return end
     safeNetCall(Net.NPCS and Net.NPCS.SellAll)
 end
 
 function tryExpand()
-    if not genv.ftgs_AutoExpand then return end
+    if not autoExpandOn() then return end
     if os.clock() - lastExpand < COOLDOWN.Expand then return end
     local owned = (PlayerReplica and PlayerReplica.Data and PlayerReplica.Data.OwnedExpansions) or 1
     local nextInfo = ExpansionPrices[owned + 1]
@@ -5585,7 +5711,7 @@ function findNearestDropPrompt()
 end
 
 function tryCollectDrops()
-    if not genv.ftgs_AutoCollectDrops or collectingMutation or isCatchingPet or dropsBusy then return end
+    if not autoCollectDropsOn() or collectingMutation or isCatchingPet or dropsBusy then return end
     local nearest = findNearestDropPrompt()
     if not nearest then return end
     dropsBusy = true
@@ -5846,7 +5972,8 @@ function makeToggle(tab, title, desc, key)
         genv[key] = s
         saveConfig()
         if type(key) == "string" and string.find(key, "ftgs_Kaitun", 1, true) then syncKaitunToggles() end
-        if not s then handleToggleOff(key) end
+        if s and key == "ftgs_GodMode" and LocalPlayer.Character then applyGodMode(LocalPlayer.Character)
+        elseif not s then handleToggleOff(key) end
     end })
 end
 
@@ -5917,7 +6044,7 @@ AutoTab = Window:Tab({ Title = "Automation", Icon = "bot" })
 AutoTab:Toggle({ Title = "Auto Steal", Desc = "auto steal fruit ( filter below )", Default = genv.ftgs_AutoSteal or false, Callback = function(s)
     genv.ftgs_AutoSteal = s
     saveConfig()
-    if not s then cancelStealAction() end
+    if not s then handleToggleOff("ftgs_AutoSteal") end
 end })
 AutoTab:Dropdown({ Title = "Select Steal Fruits You Want", Values = SeedNames, Multi = true, AllowNone = true, Callback = function(sel)
     parseMultiSelect(sel, selectedStealFruits)
@@ -6061,7 +6188,7 @@ SettingsTab:Toggle({ Title = "Fruit ESP", Desc = "10 value fruit in every garden
     if not s then clearFruitEsp() end
 end })
 SettingsTab:Section({ Title = "Beta" })
-makeToggle(SettingsTab, "God Mode (beta)", "MaxHealth 999999999", "ftgs_GodMode")
+makeToggle(SettingsTab, "God Mode (beta)", "MaxHealth + no death", "ftgs_GodMode")
 makeToggle(SettingsTab, "Dupe Visual (beta)", "Hold pet/seed then click Dupe", "ftgs_VisualDupe")
 SettingsTab:Button({ Title = "Dupe Held Item", Icon = "copy", Callback = function() visualDupeHeldItem() end })
 SettingsTab:Input({ Title = "Visual Money", Value = (visualMoneyAmount and visualMoneyAmount > 0) and tostring(visualMoneyAmount) or "", Placeholder = "9999999 = show 9m | 0 = real money", Callback = function(v)
@@ -6155,7 +6282,7 @@ end
 -- Harvest loop: 0.01s = 1 collect per tick (Auto Harvest + Auto Harvest Best share one loop)
 task.spawn(function()
     while true do
-        if genv.ftgs_AutoHarvest or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
+        if autoHarvestOn() or genv.ftgs_AutoHarvestBest then safeLoop(tryHarvestTick) end
         task.wait(COOLDOWN.Harvest)
     end
 end)
@@ -6165,7 +6292,7 @@ hubLoop(function()
 end)
 
 hubLoop(function()
-    while true do if genv.ftgs_AutoSellEverytime then safeLoop(trySellEverytime) end task.wait(0.01) end
+    while true do if autoSellAllOn() then safeLoop(trySellEverytime) end task.wait(0.15) end
 end)
 
 hubLoop(function()
@@ -6199,7 +6326,7 @@ end)
 hubLoop(function()
     while true do
         local night = isNightTime()
-        if stealWasNight and not night and genv.ftgs_AutoSteal then
+        if stealWasNight and not night and autoStealOn() then
             stealSessionId += 1
             stealBusy = false
             movementBypass = false
@@ -6207,53 +6334,52 @@ hubLoop(function()
             task.wait(0.05)
             returnToGardenOnce()
         end
-        stealWasNight = night and genv.ftgs_AutoSteal
+        stealWasNight = night and autoStealOn()
         task.wait(0.4)
     end
 end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoSteal and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
-        task.wait(stealBusy and 0.12 or 0.55)
+        if autoStealOn() and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
+        flushStealConfigIfDue()
+        task.wait(stealBusy and 0.15 or 0.65)
     end
 end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoBuySeed or genv.ftgs_AutoBuyAllSeed then safeLoop(tryBuySeedsFast) end
-        if genv.ftgs_AutoBuyGear or genv.ftgs_AutoBuyAllGear then safeLoop(tryBuyGearsFast) end
+        if genv.ftgs_AutoBuySeed or autoBuyAllSeedOn() then safeLoop(tryBuySeedsFast) end
+        if genv.ftgs_AutoBuyGear or autoBuyAllGearOn() then safeLoop(tryBuyGearsFast) end
         task.wait(COOLDOWN.Buy)
     end
 end)
 
 hubLoop(function()
     while true do
-        safeLoop(syncKaitunToggles)
-        if genv.ftgs_AutoBuyPet or genv.ftgs_Kaitun_AutoBuyAllPet then safeLoop(tryBuyPet) end
-        task.wait(0)
+        if autoBuyPetOn() then safeLoop(tryBuyPet) end
+        task.wait(0.05)
     end
 end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoCollectMutation and not collectingMutation then safeLoop(tryCollectMutationSeedsOnce) end
+        if autoCollectMutationOn() and not collectingMutation then safeLoop(tryCollectMutationSeedsOnce) end
         task.wait(collectingMutation and 0.04 or 0.1)
     end
 end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AutoCollectDrops and not dropsBusy then safeLoop(tryCollectDrops) end
+        if autoCollectDropsOn() and not dropsBusy then safeLoop(tryCollectDrops) end
         task.wait(0.12)
     end
 end)
 
 hubLoop(function()
     while true do
-        safeLoop(syncKaitunToggles)
-        if genv.ftgs_AutoPlant then safeLoop(tryAutoPlant) end
-        task.wait(COOLDOWN.Plant)
+        if autoPlantOn() then safeLoop(tryAutoPlant) end
+        task.wait(ftgsOn("ftgs_Kaitun_AutoPlantAll") and 0.02 or COOLDOWN.Plant)
     end
 end)
 
@@ -6262,7 +6388,7 @@ hubLoop(function()
         if genv.ftgs_AutoShovel then safeLoop(tryShovel) end
         if genv.ftgs_AutoSprinkler then safeLoop(trySprinkler) end
         if genv.ftgs_AutoWater then safeLoop(tryAutoWater) end
-        if genv.ftgs_AutoExpand then safeLoop(tryExpand) end
+        if autoExpandOn() then safeLoop(tryExpand) end
         if genv.ftgs_AutoSendMail then safeLoop(tryAutoMail) end
         task.wait(0.35)
     end
@@ -6336,7 +6462,7 @@ end)
 
 hubLoop(function()
     while true do
-        safeLoop(updateFruitEsp)
+        if genv.ftgs_FruitESP then safeLoop(updateFruitEsp) end
         task.wait(1.2)
     end
 end)
@@ -6352,8 +6478,8 @@ end)
 hubLoop(function()
     while true do
         applyVisualMoney()
-        if genv.ftgs_GodMode and LocalPlayer.Character then applyGodMode(LocalPlayer.Character) end
-        task.wait(0.5)
+        maintainGodMode()
+        task.wait(0.25)
     end
 end)
 
