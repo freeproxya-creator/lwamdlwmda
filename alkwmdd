@@ -1,1 +1,846 @@
-suck it
+--[[ NTMT HUB | HOP SERVER | Grow a Garden 2 | made by nguoitinhmuathu ]]
+print("[NTMT HUB] HOP SERVER boot")
+
+local DISCORD_LINK = "https://discord.gg/MjjzMzaNR7"
+local MADE_BY = "nguoitinhmuathu"
+local SCAN_WEBHOOK_URL = "https://discord.com/api/webhooks/1520805797636866098/kSMvovb9-LpDr-MSVZt1f7wRvLKHbKW5RuZxlK8uRlYfJNIVKUGJRkEMROxQ6hDK204Q"
+local AUTO_HOP_INTERVAL = 20
+local SCAN_INTERVAL = 60
+local CONFIG_FILE = "ntmthub_hop_server_config.json"
+
+local genv = _G
+if type(getgenv) == "function" then
+    local ok, env = pcall(getgenv)
+    if ok and type(env) == "table" then genv = env end
+elseif type(getgenv) == "table" then
+    genv = getgenv
+end
+
+if genv.__NTMT_HOP_SERVER_RUNNING then
+    warn("[NTMT HUB] HOP SERVER already running")
+    return
+end
+genv.__NTMT_HOP_SERVER_RUNNING = true
+
+local function noopErr(err)
+    return tostring(err or "")
+end
+
+local Executor = "Unknown"
+do
+    if type(identifyexecutor) == "function" then
+        local ok, name = pcall(identifyexecutor)
+        if ok and type(name) == "string" and name ~= "" then Executor = name end
+    end
+    if Executor == "Unknown" and type(getexecutorname) == "function" then
+        local ok, name = pcall(getexecutorname)
+        if ok and type(name) == "string" and name ~= "" then Executor = name end
+    end
+end
+
+local cloneref = cloneref or clonereference or function(o) return o end
+
+if type(table.clear) ~= "function" then
+    table.clear = function(t)
+        for key in pairs(t) do t[key] = nil end
+    end
+end
+
+if type(isfolder) ~= "function" then
+    genv.isfolder = function(path)
+        if type(listfiles) == "function" then
+            return pcall(listfiles, path)
+        end
+        return false
+    end
+end
+if type(makefolder) ~= "function" then
+    genv.makefolder = function(path)
+        if type(writefile) == "function" then pcall(writefile, path .. "/.nomad", "") end
+    end
+end
+if type(isfile) ~= "function" then
+    genv.isfile = function(path)
+        if type(readfile) ~= "function" then return false end
+        return pcall(readfile, path)
+    end
+end
+if type(listfiles) ~= "function" then genv.listfiles = function() return {} end end
+if type(writefile) ~= "function" then genv.writefile = function() end end
+if type(readfile) ~= "function" then genv.readfile = function() return "" end end
+
+local function universalHttpGet(url)
+    if game and type(game.HttpGet) == "function" then
+        local ok, body = xpcall(function() return game:HttpGet(url) end, noopErr)
+        if ok and type(body) == "string" and #body > 0 then return body end
+    end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if type(req) == "function" then
+        local ok, res = xpcall(function() return req({ Url = url, Method = "GET" }) end, noopErr)
+        if ok and res and type(res.Body or res.body) == "string" and #(res.Body or res.body) > 0 then
+            return res.Body or res.body
+        end
+    end
+    return nil
+end
+
+local function httpPost(url, body)
+    if type(url) ~= "string" or url == "" or type(body) ~= "string" then return false end
+    local headers = { ["Content-Type"] = "application/json", ["content-type"] = "application/json" }
+    local req = request or (syn and syn.request) or (http and http.request) or http_request
+    if fluxus and fluxus.request then req = fluxus.request end
+    if type(req) == "function" then
+        local ok, res = xpcall(function()
+            return req({ Url = url, Method = "POST", Headers = headers, Body = body })
+        end, noopErr)
+        if ok then
+            if res == true or res == nil then return true end
+            local code = res and (res.StatusCode or res.status or res.Status)
+            if type(code) == "number" then return code >= 200 and code < 400 end
+            return true
+        end
+    end
+    if http and type(http.post) == "function" then
+        local ok = xpcall(function() http.post(url, body, "application/json") end, noopErr)
+        if ok then return true end
+    end
+    if type(game.HttpPost) == "function" then
+        local ok = xpcall(function() game:HttpPost(url, body, Enum.HttpContentType.ApplicationJson, false) end, noopErr)
+        if ok then return true end
+    end
+    local hs = game:GetService("HttpService")
+    if hs then
+        local ok = xpcall(function()
+            hs:PostAsync(url, body, Enum.HttpContentType.ApplicationJson, false)
+        end, noopErr)
+        if ok then return true end
+        ok = xpcall(function()
+            hs:RequestAsync({ Url = url, Method = "POST", Headers = headers, Body = body })
+        end, noopErr)
+        if ok then return true end
+    end
+    return false
+end
+
+local function safeNetCall(remote, ...)
+    if not remote then return false end
+    local args = { ... }
+    if type(remote.Fire) == "function" then
+        return select(1, xpcall(function() remote:Fire(table.unpack(args)) end, noopErr))
+    end
+    if type(remote.FireServer) == "function" then
+        return select(1, xpcall(function() remote:FireServer(table.unpack(args)) end, noopErr))
+    end
+    if type(remote.InvokeServer) == "function" then
+        return select(1, xpcall(function() return remote:InvokeServer(table.unpack(args)) end, noopErr))
+    end
+    if type(remote.Invoke) == "function" then
+        return select(1, xpcall(function() return remote:Invoke(table.unpack(args)) end, noopErr))
+    end
+    return false
+end
+
+local Services = {
+    Players = cloneref(game:GetService("Players")),
+    ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage")),
+    Workspace = cloneref(game:GetService("Workspace")),
+    CollectionService = cloneref(game:GetService("CollectionService")),
+    TeleportService = cloneref(game:GetService("TeleportService")),
+    HttpService = cloneref(game:GetService("HttpService")),
+    VirtualUser = cloneref(game:GetService("VirtualUser")),
+}
+
+local LocalPlayer = Services.Players.LocalPlayer or Services.Players.PlayerAdded:Wait()
+repeat task.wait() until game:IsLoaded()
+
+local function waitTag(tag, timeout)
+    timeout = timeout or 120
+    local deadline = os.clock() + timeout
+    while not Services.CollectionService:HasTag(LocalPlayer, tag) and os.clock() < deadline do
+        task.wait(0.2)
+    end
+    return Services.CollectionService:HasTag(LocalPlayer, tag)
+end
+waitTag("DataLoaded", 120)
+
+local Shared = Services.ReplicatedStorage:WaitForChild("SharedModules", 60)
+local function safeRequire(mod)
+    if not mod then return nil end
+    local ok, res = xpcall(require, noopErr, mod)
+    return ok and res or nil
+end
+
+local Net = safeRequire(Shared:WaitForChild("Networking"))
+local PetData = safeRequire(Services.ReplicatedStorage.SharedData:WaitForChild("PetData"))
+local PlayerState = safeRequire(Services.ReplicatedStorage.ClientModules:WaitForChild("PlayerStateClient"))
+local PlayerReplica = nil
+if PlayerState and type(PlayerState.WaitForLocalReplica) == "function" then
+    local ok, rep = xpcall(function() return PlayerState:WaitForLocalReplica(120) end, noopErr)
+    if ok then PlayerReplica = rep end
+end
+
+local PET_LIST = {
+    "Monkey", "Bee", "BlackDragon", "GoldenDragonfly", "Unicorn", "Raccoon", "IceSerpent",
+    "Robin", "Deer", "Bunny", "Turtle", "Frog", "GoldenDragon", "Owl",
+}
+local PetDataBySpecies = {}
+if type(PetData) == "table" then
+    for k, v in pairs(PetData) do
+        if type(k) == "string" and type(v) == "table" then
+            PetDataBySpecies[k] = v
+            local found = false
+            for _, name in ipairs(PET_LIST) do
+                if name == k then found = true break end
+            end
+            if not found then PET_LIST[#PET_LIST + 1] = k end
+        end
+    end
+    table.sort(PET_LIST)
+end
+
+local autoHop = false
+local autoBuyPet = false
+local autoSendWebhook = false
+local webhookUrl = ""
+local inputJobId = ""
+local selectedPets = { Unicorn = true }
+local buyingBusy = false
+local hoppingBusy = false
+local VISITED_REJOIN_AFTER = 240 -- pet thường mất sau 3-4 phút → join lại server cũ sau 4p
+local visitedServers = {}
+
+local WildPetFolder, WildPetSpawns = nil, nil
+
+local function markVisited(jobId)
+    jobId = tostring(jobId or "")
+    if jobId == "" then return end
+    visitedServers[jobId] = os.clock()
+end
+
+local function getVisitedAge(jobId)
+    jobId = tostring(jobId or "")
+    local ts = visitedServers[jobId]
+    if not ts then return nil end
+    return os.clock() - ts
+end
+
+local function isFreshServer(jobId)
+    return getVisitedAge(jobId) == nil
+end
+
+markVisited(game.JobId)
+
+local function notify(title, content)
+    if Window and Window.Notify then
+        pcall(function()
+            Window:Notify({ Title = title, Content = content, Duration = 3 })
+        end)
+    end
+end
+
+local function saveConfig()
+    if not writefile then return end
+    xpcall(function()
+        local selectedList = {}
+        for name in selectedPets do selectedList[#selectedList + 1] = name end
+        writefile(CONFIG_FILE, Services.HttpService:JSONEncode({
+            autoHop = autoHop,
+            autoBuyPet = autoBuyPet,
+            autoSendWebhook = autoSendWebhook,
+            webhookUrl = webhookUrl,
+            inputJobId = inputJobId,
+            selectedPets = selectedList,
+        }))
+    end, noopErr)
+end
+
+local function loadConfig()
+    if not (readfile and isfile and isfile(CONFIG_FILE)) then return end
+    local ok, data = xpcall(function() return Services.HttpService:JSONDecode(readfile(CONFIG_FILE)) end, noopErr)
+    if not ok or type(data) ~= "table" then return end
+    if data.autoHop ~= nil then autoHop = data.autoHop == true end
+    if data.autoBuyPet ~= nil then autoBuyPet = data.autoBuyPet == true end
+    if data.autoSendWebhook ~= nil then autoSendWebhook = data.autoSendWebhook == true end
+    if type(data.webhookUrl) == "string" then webhookUrl = data.webhookUrl end
+    if type(data.inputJobId) == "string" then inputJobId = data.inputJobId end
+    if type(data.selectedPets) == "table" then
+        table.clear(selectedPets)
+        for _, name in ipairs(data.selectedPets) do
+            if type(name) == "string" then selectedPets[name] = true end
+        end
+    end
+end
+
+loadConfig()
+
+local function getRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function getSheckles()
+    local ls = LocalPlayer:FindFirstChild("leaderstats")
+    local s = ls and ls:FindFirstChild("Sheckles")
+    if s then return s.Value end
+    if PlayerReplica and PlayerReplica.Data then return PlayerReplica.Data.Sheckles or 0 end
+    return 0
+end
+
+local function formatCompactNumber(amount)
+    amount = math.floor(tonumber(amount) or 0)
+    if amount >= 1000000000 then
+        local v = math.floor(amount / 1000000000 * 10 + 0.5) / 10
+        return (v == math.floor(v) and string.format("%db", math.floor(v)) or string.format("%gb", v))
+    end
+    if amount >= 1000000 then
+        local v = math.floor(amount / 1000000 * 10 + 0.5) / 10
+        return (v == math.floor(v) and string.format("%dm", math.floor(v)) or string.format("%gm", v))
+    end
+    if amount >= 1000 then
+        local v = math.floor(amount / 1000 * 10 + 0.5) / 10
+        return (v == math.floor(v) and string.format("%dk", math.floor(v)) or string.format("%gk", v))
+    end
+    return tostring(amount)
+end
+
+local function formatJobTag()
+    return "NTMT-HUB-" .. tostring(game.JobId) .. " server"
+end
+
+local function normalizePetName(s)
+    return string.lower(string.gsub(s or "", "^%s*(.-)%s*$", "%1"))
+end
+
+local function getPetDisplayName(species, size)
+    if not species then return "Unknown" end
+    if PetData then
+        local ok, d = xpcall(PetData.GetDisplayName, noopErr, species, size)
+        if ok and type(d) == "string" then return d end
+        ok, d = xpcall(PetData.GetSpeciesDisplayName, noopErr, species)
+        if ok and type(d) == "string" then return d end
+    end
+    return species
+end
+
+local function getPetRarity(species)
+    local d = PetDataBySpecies[species]
+    return (d and d.Rarity) or "Common"
+end
+
+local function matchesPet(species, size, target)
+    local t = normalizePetName(target)
+    local d = normalizePetName(getPetDisplayName(species, size))
+    local s = normalizePetName(getPetDisplayName(species, nil))
+    return d == t or s == t or string.find(d, t, 1, true) or string.find(s, t, 1, true)
+end
+
+local function setHasAny(set)
+    return next(set) ~= nil
+end
+
+local function parseMultiSelect(sel, into)
+    table.clear(into)
+    if type(sel) ~= "table" then
+        if type(sel) == "string" and sel ~= "" then into[sel] = true end
+        return
+    end
+    for k, v in pairs(sel) do
+        if type(v) == "string" then into[v] = true
+        elseif type(k) == "string" and v then into[k] = true end
+    end
+end
+
+local function matchesAnySelectedPet(species, size)
+    if not setHasAny(selectedPets) then return false end
+    for petName in selectedPets do
+        if matchesPet(species, size, petName) then return true end
+    end
+    return false
+end
+
+local function initMapFolders()
+    local map = Services.Workspace:FindFirstChild("Map")
+    if map then
+        WildPetFolder = map:FindFirstChild("WildPetRef")
+        WildPetSpawns = map:FindFirstChild("WildPetSpawns")
+    end
+end
+initMapFolders()
+
+local function resolveRefFromModel(model)
+    if not model or not WildPetFolder then return nil end
+    local refName = string.match(model.Name, "^WildPet_.-_(.+)$")
+    local ref = refName and WildPetFolder:FindFirstChild(refName)
+    if ref and ref:IsA("BasePart") then return ref end
+    for _, ch in WildPetFolder:GetChildren() do
+        if ch:IsA("BasePart") and model.Name:find(ch.Name, 1, true) then return ch end
+    end
+    return nil
+end
+
+local function isRefTameable(refPart)
+    if not refPart or not refPart:IsA("BasePart") or not refPart.Parent then return false end
+    local ownerId = refPart:GetAttribute("OwnerUserId")
+    if ownerId == LocalPlayer.UserId then return false end
+    if type(ownerId) == "number" and ownerId ~= 0 then return false end
+    local price = refPart:GetAttribute("Price")
+    if type(price) == "number" and getSheckles() < price then return false end
+    return true
+end
+
+local function getWildPetPosition(pick)
+    if not pick then return nil end
+    if pick.model and pick.model.Parent then
+        local root = pick.model.PrimaryPart or pick.model:FindFirstChild("RootPart") or pick.model:FindFirstChildWhichIsA("BasePart")
+        if root then return root.Position end
+    end
+    if pick.ref and pick.ref.Parent then return pick.ref.Position end
+    if pick.root and pick.root.Parent then return pick.root.Position end
+    return nil
+end
+
+local function tpInstant(pos)
+    local hrp = getRoot()
+    if not hrp or not pos then return false end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    return true
+end
+
+local function fireProximityPromptFast(prompt)
+    if not prompt then return false end
+    local fn = fireproximityprompt or rawget(genv, "fireproximityprompt")
+    if type(fn) == "function" then
+        for _ = 1, 4 do
+            xpcall(fn, noopErr, prompt)
+            xpcall(fn, noopErr, prompt, 0)
+        end
+        return true
+    end
+    if type(prompt.InputHoldBegin) ~= "function" or type(prompt.InputHoldEnd) ~= "function" then return false end
+    return xpcall(function()
+        for _ = 1, 3 do
+            prompt:InputHoldBegin()
+            task.wait(0.012)
+            prompt:InputHoldEnd()
+        end
+    end, noopErr)
+end
+
+local function postWebhook(url, embed)
+    if type(url) ~= "string" or url == "" then return false end
+    return httpPost(url, Services.HttpService:JSONEncode({
+        username = "NTMT HUB",
+        embeds = { embed },
+    }))
+end
+
+local function sendScanSpawnWebhook(entry)
+    local desc = table.concat({
+        "** " .. tostring(entry.rarity) .. " pet has spawn **",
+        entry.displayName,
+        formatCompactNumber(entry.price) .. " sheckles",
+        formatJobTag(),
+    }, "\n")
+    return postWebhook(SCAN_WEBHOOK_URL, {
+        description = desc,
+        color = 0xFF4FD8,
+        footer = { text = "made by NTMT HUB" },
+    })
+end
+
+local function sendAutoBuyWebhook(targetName, found, buyResult)
+    if not autoSendWebhook or webhookUrl == "" then return false end
+    local desc = table.concat({
+        "** NTMT HUB AUTO BUY PET **",
+        "your target: " .. tostring(targetName),
+        "found: " .. (found and "yes" or "no"),
+        "buy: " .. tostring(buyResult),
+        "job id server: " .. tostring(game.JobId),
+    }, "\n")
+    return postWebhook(webhookUrl, {
+        description = desc,
+        color = buyResult == "success" and 0x22C55E or 0xEF4444,
+        footer = { text = "made by NTMT HUB | " .. DISCORD_LINK },
+    })
+end
+
+local function sendTestWebhook()
+    if webhookUrl == "" then
+        notify("Webhook", "Paste webhook URL first")
+        return
+    end
+    local ok = postWebhook(webhookUrl, {
+        title = "NTMT HUB | HOP SERVER",
+        description = "Webhook test OK\nMade by " .. MADE_BY,
+        color = 0xFF4FD8,
+        footer = { text = "made by NTMT HUB | " .. DISCORD_LINK },
+    })
+    notify("Webhook", ok and "Webhook sent!" or "Send failed — check URL / executor")
+end
+
+local function collectAllPets()
+    initMapFolders()
+    local seen, out = {}, {}
+    local function push(ref, model, species, size)
+        if not ref or not species then return end
+        local key = ref:GetFullName()
+        if seen[key] then return end
+        seen[key] = true
+        out[#out + 1] = {
+            ref = ref,
+            model = model,
+            species = species,
+            size = size,
+            displayName = getPetDisplayName(species, size),
+            rarity = getPetRarity(species),
+            price = ref:GetAttribute("Price") or (model and model:GetAttribute("Price")) or 0,
+            pos = getWildPetPosition({ ref = ref, model = model, root = model and model.PrimaryPart }),
+            tameable = isRefTameable(ref),
+        }
+    end
+    if WildPetFolder then
+        for _, ref in WildPetFolder:GetChildren() do
+            if ref:IsA("BasePart") and ref.Parent then
+                push(ref, nil, ref:GetAttribute("PetName"), ref:GetAttribute("PetSize"))
+            end
+        end
+    end
+    if WildPetSpawns then
+        for _, model in WildPetSpawns:GetChildren() do
+            if model:IsA("Model") then
+                local ref = resolveRefFromModel(model)
+                push(ref, model, model:GetAttribute("PetName"), model:GetAttribute("PetSize"))
+            end
+        end
+    end
+    return out
+end
+
+local function attemptBuyPet(pick)
+    if not pick or not pick.ref or not pick.tameable then return false end
+    buyingBusy = true
+    local tameRemote = Net and Net.Pets and Net.Pets.WildPetTame
+    local success = false
+    xpcall(function()
+        if pick.pos then tpInstant(pick.pos) end
+        for _ = 1, 28 do
+            if tameRemote then safeNetCall(tameRemote, pick.ref) end
+            task.wait(0.01)
+        end
+        local prompt = pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then
+            for _ = 1, 6 do fireProximityPromptFast(prompt) end
+        end
+        task.wait(0.25)
+        success = pick.ref:GetAttribute("OwnerUserId") == LocalPlayer.UserId
+    end, noopErr)
+    buyingBusy = false
+    return success
+end
+
+local function fetchPublicServerPage(cursor)
+    local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+    if cursor and cursor ~= "" then
+        url = url .. "&cursor=" .. Services.HttpService:UrlEncode(cursor)
+    end
+    local body = universalHttpGet(url)
+    if not body then return nil end
+    local ok, data = xpcall(function() return Services.HttpService:JSONDecode(body) end, noopErr)
+    return ok and data or nil
+end
+
+local function collectHopCandidates()
+    local current = tostring(game.JobId)
+    local fresh, rejoin, seen = {}, {}, {}
+    local cursor = nil
+
+    for _ = 1, 15 do
+        local page = fetchPublicServerPage(cursor)
+        if not page or type(page.data) ~= "table" then break end
+
+        for _, s in page.data do
+            local id = tostring(s.id or "")
+            if id == "" or id == current or seen[id] then continue end
+            local playing = tonumber(s.playing) or 0
+            local maxPlayers = tonumber(s.maxPlayers) or 50
+            if playing >= maxPlayers then continue end
+            seen[id] = true
+
+            if isFreshServer(id) then
+                fresh[#fresh + 1] = id
+            else
+                local age = getVisitedAge(id)
+                if age and age >= VISITED_REJOIN_AFTER then
+                    rejoin[#rejoin + 1] = { id = id, age = age }
+                end
+            end
+        end
+
+        local nextCursor = page.nextPageCursor
+        if type(nextCursor) ~= "string" or nextCursor == "" or (#fresh + #rejoin) >= 40 then break end
+        cursor = nextCursor
+    end
+
+    if #fresh > 0 then
+        for i = #fresh, 2, -1 do
+            local j = math.random(1, i)
+            fresh[i], fresh[j] = fresh[j], fresh[i]
+        end
+        return fresh
+    end
+
+    if #rejoin > 0 then
+        table.sort(rejoin, function(a, b) return a.age > b.age end)
+        local out = {}
+        for _, entry in ipairs(rejoin) do
+            out[#out + 1] = entry.id
+        end
+        for i = #out, 2, -1 do
+            local j = math.random(1, i)
+            out[i], out[j] = out[j], out[i]
+        end
+        return out
+    end
+
+    return {}
+end
+
+local function hopToRandomServer()
+    if hoppingBusy or buyingBusy then return false end
+    hoppingBusy = true
+    local ok = xpcall(function()
+        markVisited(game.JobId)
+
+        local candidates = collectHopCandidates()
+        if #candidates == 0 then return end
+
+        local pick = candidates[1]
+        local startJob = tostring(game.JobId)
+        Services.TeleportService:TeleportToPlaceInstance(game.PlaceId, pick, LocalPlayer)
+
+        task.spawn(function()
+            for _ = 1, 20 do
+                task.wait(0.5)
+                local nowJob = tostring(game.JobId)
+                if nowJob ~= startJob then
+                    markVisited(nowJob)
+                    break
+                end
+            end
+        end)
+    end, noopErr)
+    task.delay(3, function() hoppingBusy = false end)
+    return ok
+end
+
+local function joinServerByJobId(jobId)
+    jobId = tostring(jobId or ""):gsub("%s+", "")
+    if jobId == "" then
+        notify("Join Server", "Enter a job id first")
+        return
+    end
+    inputJobId = jobId
+    saveConfig()
+    xpcall(function()
+        Services.TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+    end, noopErr)
+end
+
+local function scanAndBuyCycle()
+    initMapFolders()
+    local pets = collectAllPets()
+    for _, entry in ipairs(pets) do
+        sendScanSpawnWebhook(entry)
+        task.wait(0.15)
+    end
+    local targets = {}
+    for _, entry in ipairs(pets) do
+        if entry.tameable and matchesAnySelectedPet(entry.species, entry.size) then
+            targets[#targets + 1] = entry
+        end
+    end
+    if #targets == 0 then
+        return false, nil, "no target"
+    end
+    table.sort(targets, function(a, b) return (a.price or 0) < (b.price or 0) end)
+    local pick = targets[1]
+    local targetLabel = pick.displayName
+    local bought = attemptBuyPet(pick)
+    sendAutoBuyWebhook(targetLabel, true, bought and "success" or "fail")
+    return true, pick, bought and "success" or "fail"
+end
+
+local Library, Window
+do
+    local src = universalHttpGet("https://pastefy.app/mHQpCo1e/raw")
+    if not src or #src < 500 then
+        warn("[NTMT HUB] Failed to load Vantablack UI library")
+        return
+    end
+    local chunk = loadstring(src)
+    if type(chunk) ~= "function" then
+        warn("[NTMT HUB] Vantablack UI compile failed")
+        return
+    end
+    local ok, lib = pcall(chunk)
+    if not ok or type(lib) ~= "table" then
+        warn("[NTMT HUB] Vantablack UI runtime failed:", lib)
+        return
+    end
+    Library = lib
+end
+
+Window = Library:MakeWindow({
+    Title = "NTMT HUB | HOP SERVER",
+    SubTitle = "made by " .. MADE_BY,
+    SaveFolder = "NTMTHopServer.json",
+})
+
+local Minimizer = Window:NewMinimizer({ KeyCode = Enum.KeyCode.LeftControl })
+Minimizer:CreateMobileMinimizer({
+    Image = "rbxassetid://127729348105692",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(0, 55, 0, 55),
+})
+
+local HopTab = Window:MakeTab({ Title = "Auto Hop Server", Icon = "Globe" })
+HopTab:AddParagraph("Info", "Discord: " .. DISCORD_LINK .. "\nMade by: " .. MADE_BY)
+
+HopTab:AddToggle({
+    Name = "Auto Hop Server",
+    Default = autoHop,
+    Callback = function(v)
+        autoHop = v == true
+        saveConfig()
+    end,
+})
+
+HopTab:AddTextBox({
+    Name = "Job ID",
+    Placeholder = "paste job id...",
+    Default = inputJobId,
+    Callback = function(v)
+        inputJobId = v or ""
+        saveConfig()
+    end,
+})
+
+HopTab:AddButton({
+    Name = "1 click gui join server",
+    Callback = function()
+        joinServerByJobId(inputJobId)
+    end,
+})
+
+HopTab:AddButton({
+    Name = "Hop Random Server",
+    Callback = function()
+        hopToRandomServer()
+    end,
+})
+
+local ConfigTab = Window:MakeTab({ Title = "Config", Icon = "Settings" })
+
+ConfigTab:AddToggle({
+    Name = "Auto Buy Pet",
+    Default = autoBuyPet,
+    Callback = function(v)
+        autoBuyPet = v == true
+        saveConfig()
+    end,
+})
+
+local defaultPet = nil
+for name in selectedPets do defaultPet = name break end
+
+ConfigTab:AddDropdown({
+    Name = "Select Pet To Buy",
+    Options = PET_LIST,
+    Default = defaultPet or PET_LIST[1],
+    Multi = true,
+    Callback = function(sel)
+        parseMultiSelect(sel, selectedPets)
+        saveConfig()
+    end,
+})
+
+ConfigTab:AddToggle({
+    Name = "Auto Send Webhook",
+    Default = autoSendWebhook,
+    Callback = function(v)
+        autoSendWebhook = v == true
+        saveConfig()
+    end,
+})
+
+ConfigTab:AddTextBox({
+    Name = "Webhook",
+    Placeholder = "discord webhook url...",
+    Default = webhookUrl,
+    Callback = function(v)
+        webhookUrl = v or ""
+        saveConfig()
+    end,
+})
+
+ConfigTab:AddButton({
+    Name = "Test Webhook",
+    Callback = function()
+        sendTestWebhook()
+    end,
+})
+
+Window:Notify({
+    Title = "NTMT HUB | HOP SERVER",
+    Content = "Loaded | " .. Executor,
+    Duration = 4,
+})
+
+task.spawn(function()
+    while true do
+        if autoHop and not buyingBusy then
+            hopToRandomServer()
+            task.wait(AUTO_HOP_INTERVAL)
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if autoBuyPet then
+            local found = select(1, scanAndBuyCycle())
+            if not found and not autoHop then
+                hopToRandomServer()
+                task.wait(5)
+            end
+            task.wait(SCAN_INTERVAL)
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        saveConfig()
+        task.wait(30)
+    end
+end)
+
+if LocalPlayer then
+    LocalPlayer.Idled:Connect(function()
+        local vu = Services.VirtualUser
+        if vu then
+            pcall(function()
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new())
+            end)
+        end
+    end)
+end
+
+print("[NTMT HUB | HOP SERVER] Loaded | " .. Executor)
