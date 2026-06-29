@@ -822,6 +822,9 @@ exceptHarvestPlants = {}
 collectOnlyPlants = {}
 harvestMaxWeight = 0
 stealSessionId = 0
+lastStealReturn = 0
+stealWasNight = false
+STEAL_RETURN_COOLDOWN = 2.5
 lastKnownMoveCF = nil
 favoriteRemote = nil
 favoriteRemotePath = nil
@@ -2564,10 +2567,49 @@ function isNearOwnPlotCenter(extra)
     return flatDistXZ(hrp.Position, savedPlotCenter) <= extra
 end
 
-function returnToGarden()
-    if isNearOwnPlotCenter(28) then return end
+function getGardenReturnPos()
     refreshOwnerPlot()
-    if savedPlotCenter then tpInstant(savedPlotCenter) end
+    if OwnerPlot then
+        local sp = OwnerPlot:FindFirstChild("SpawnPoint")
+        if sp then
+            if sp:IsA("BasePart") then return sp.Position end
+            if sp:IsA("Attachment") then return sp.WorldPosition end
+        end
+    end
+    return savedPlotCenter
+end
+
+function returnToGardenOnce()
+    local now = os.clock()
+    if now - lastStealReturn < STEAL_RETURN_COOLDOWN then return end
+    refreshOwnerPlot()
+    local pos = getGardenReturnPos()
+    if not pos then return end
+    local hrp = getRoot()
+    if hrp and flatDistXZ(hrp.Position, pos) <= 34 then
+        lastStealReturn = now
+        return
+    end
+    lastStealReturn = now
+    if hrp then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    end
+end
+
+function returnToGarden()
+    returnToGardenOnce()
+end
+
+function finishStealSession(sessionId, shouldReturn)
+    if sessionId ~= stealSessionId then return end
+    if shouldReturn then returnToGardenOnce() end
+    movementBypass = false
+    gardenActionLock = false
+    local hum = getHumanoid()
+    if hum then hum.PlatformStand = false end
+    stealBusy = false
 end
 
 function holdGardenStill(duration)
@@ -4011,42 +4053,39 @@ function tryAutoSteal()
     task.spawn(function()
         safeNetCall(Net.Garden and Net.Garden.RequestGardens)
         task.wait(0.03)
-        movementBypass = true
-        gardenActionLock = true
-        while genv.ftgs_AutoSteal and sessionId == stealSessionId and not isInventoryFull() and isNightTime() do
-            local targets = collectAllStealTargets()
-            if #targets == 0 then break end
-            local worked = false
-            for _, t in ipairs(targets) do
-                if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId or not isNightTime() then break end
+        if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then
+            finishStealSession(sessionId, false)
+            return
+        end
+
+        local stolenTotal = 0
+        local targets = collectAllStealTargets()
+        for _, t in ipairs(targets) do
+            if stolenTotal >= STEAL_BATCH then break end
+            if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then break end
+            if isInventoryFull() then break end
+
+            local plot = t.plot
+            local owner = t.owner
+            if owner and isOwnerInPlot(plot, owner) then continue end
+            if owner and not plotUnlocked(owner) then continue end
+            local uid = owner and owner.UserId or t.ownerUserId
+            local fruits = getStealableFruitsOnPlot(plot, STEAL_BATCH - stolenTotal)
+
+            for _, fruit in fruits do
+                if stolenTotal >= STEAL_BATCH then break end
+                if sessionId ~= stealSessionId or not genv.ftgs_AutoSteal or not isNightTime() then break end
                 if isInventoryFull() then break end
-                local plot = t.plot
-                local owner = t.owner
-                if owner and isOwnerInPlot(plot, owner) then continue end
-                if owner and not plotUnlocked(owner) then continue end
-                local uid = owner and owner.UserId or t.ownerUserId
-                local fruits = getStealableFruitsOnPlot(plot, STEAL_BATCH)
-                if #fruits == 0 then continue end
-                local stolenOnPlot = 0
-                for _, fruit in fruits do
-                    if not genv.ftgs_AutoSteal or sessionId ~= stealSessionId or not isNightTime() then break end
-                    if isInventoryFull() then break end
-                    if owner and isOwnerInPlot(plot, owner) then break end
-                    if stealFruit(fruit, uid, sessionId) then
-                        stolenOnPlot += 1
-                        worked = true
-                    end
-                    task.wait(0.015)
+                if owner and isOwnerInPlot(plot, owner) then break end
+                if stealFruit(fruit, uid, sessionId) then
+                    stolenTotal += 1
                 end
-                if worked then break end
+                task.wait(0.015)
             end
-            if not worked then break end
         end
-        if sessionId == stealSessionId then
-            movementBypass = false
-            gardenActionLock = false
-            stealBusy = false
-        end
+
+        local dayBroke = not isNightTime()
+        finishStealSession(sessionId, stolenTotal > 0 or dayBroke)
     end)
 end
 
@@ -5895,9 +5934,9 @@ multiDropdown(AutoTab, "Select Pets", PET_LIST, selectedPets, false)
 
 KaitunTab = Window:Tab({ Title = "Kaitun", Icon = "zap" })
 KaitunTab:Section({ Title = "Farm" })
-makeToggle(KaitunTab, "Auto Plant", "uses Auto Plant (Main logic) by rarity", "ftgs_Kaitun_AutoPlantAll")
+makeToggle(KaitunTab, "Auto Plant", "auto plant seed", "ftgs_Kaitun_AutoPlantAll")
 KaitunTab:Dropdown({
-    Title = "Plant Rarity",
+    Title = "select seed to plant",
     Values = RARITY_TIER_LIST,
     Multi = true,
     AllowNone = true,
@@ -5907,26 +5946,26 @@ KaitunTab:Dropdown({
         syncKaitunToggles()
     end,
 })
-makeToggle(KaitunTab, "Auto Harvest", "uses Main auto harvest (not best)", "ftgs_Kaitun_AutoHarvest")
-makeToggle(KaitunTab, "Auto Expand Garden", "uses Main tab expand", "ftgs_Kaitun_AutoExpand")
+makeToggle(KaitunTab, "Auto Harvest", "auto harvest fruit in your garden", "ftgs_Kaitun_AutoHarvest")
+makeToggle(KaitunTab, "Auto Expand Garden", "expand your garden", "ftgs_Kaitun_AutoExpand")
 KaitunTab:Section({ Title = "Shop" })
-makeToggle(KaitunTab, "Auto Buy All Seed", "uses Shop buy all seed", "ftgs_Kaitun_AutoBuyAllSeed")
-makeToggle(KaitunTab, "Auto Buy All Gear", "uses Shop buy all gear", "ftgs_Kaitun_AutoBuyAllGear")
+makeToggle(KaitunTab, "Auto Buy All Seed", "auto buy all seed in shop", "ftgs_Kaitun_AutoBuyAllSeed")
+makeToggle(KaitunTab, "Auto Buy All Gear", "auto buy all gear in shop", "ftgs_Kaitun_AutoBuyAllGear")
 KaitunTab:Section({ Title = "Sell & Steal" })
-makeToggle(KaitunTab, "Auto Sell All", "uses Main auto sell", "ftgs_Kaitun_AutoSellAll")
-makeToggle(KaitunTab, "Auto Steal", "uses Automation auto steal", "ftgs_Kaitun_AutoSteal")
+makeToggle(KaitunTab, "Auto Sell All", "auto sell all fruit", "ftgs_Kaitun_AutoSellAll")
+makeToggle(KaitunTab, "Auto Steal", "auto steal fruit", "ftgs_Kaitun_AutoSteal")
 KaitunTab:Section({ Title = "Pet" })
-makeToggle(KaitunTab, "Auto Buy All Pet", "uses Auto Buy Pet by rarity", "ftgs_Kaitun_AutoBuyAllPet")
+makeToggle(KaitunTab, "Auto Buy All Pet", "auto buy pet", "ftgs_Kaitun_AutoBuyAllPet")
 KaitunTab:Dropdown({
-    Title = "Pet Rarity",
+    Title = "select pet to buy",
     Values = RARITY_TIER_LIST,
     Multi = true,
     AllowNone = true,
     Callback = function(sel) parseMultiSelect(sel, kaitunPetRarities) end,
 })
 KaitunTab:Section({ Title = "Collect" })
-makeToggle(KaitunTab, "Auto Collect Rainbow/Gold/Mega Seed", "uses Automation collect seeds", "ftgs_Kaitun_AutoCollectMutation")
-makeToggle(KaitunTab, "Auto Collect Item Drop", "uses Automation collect drops", "ftgs_Kaitun_AutoCollectDrops")
+makeToggle(KaitunTab, "Auto Collect seeds", "auto collect rainbow and gold and mega seed", "ftgs_Kaitun_AutoCollectMutation")
+makeToggle(KaitunTab, "Auto Collect Item Drop", "auto collect drop item", "ftgs_Kaitun_AutoCollectDrops")
 
 ShopTab = Window:Tab({ Title = "Shop", Icon = "shopping-cart" })
 makeToggle(ShopTab, "Auto Buy Seed", "select seeds to buy", "ftgs_AutoBuySeed")
@@ -6072,7 +6111,7 @@ InfoTab:Paragraph({ Title = "Made by", Desc = MADE_BY })
 end
 
 KeyTab = Window:Tab({ Title = "Key", Icon = "key" })
-KeyTab:Section({ Title = "NEED KEY TO USE SCRIPT" })
+KeyTab:Section({ Title = "FREE KEY IN DISCORD" })
 KeyTab:Paragraph({
     Title = "how to get key",
     Desc = "click get key and join our discord.",
@@ -6159,8 +6198,24 @@ end)
 
 hubLoop(function()
     while true do
+        local night = isNightTime()
+        if stealWasNight and not night and genv.ftgs_AutoSteal then
+            stealSessionId += 1
+            stealBusy = false
+            movementBypass = false
+            gardenActionLock = false
+            task.wait(0.05)
+            returnToGardenOnce()
+        end
+        stealWasNight = night and genv.ftgs_AutoSteal
+        task.wait(0.4)
+    end
+end)
+
+hubLoop(function()
+    while true do
         if genv.ftgs_AutoSteal and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
-        task.wait(stealBusy and 0.08 or 0.35)
+        task.wait(stealBusy and 0.12 or 0.55)
     end
 end)
 
