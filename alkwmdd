@@ -796,12 +796,18 @@ NEAR_PLAYER_DIST = 45
 PLOT_EDGE_MARGIN = 65
 SPRINKLER_MIN_DIST = 8
 STEAL_BATCH = 3
-STEAL_HOLD_TIMEOUT = 3
-STEAL_TICK = 0.08
-STEAL_NET_GAP = 0.14
-STEAL_TP_DRIFT = 10
-PLANT_BATCH = 4
-KAITUN_PLANT_BATCH = 12
+STEAL_HOLD_TIMEOUT = 1.8
+STEAL_TICK = 0.05
+STEAL_NET_GAP = 0.08
+STEAL_TP_DRIFT = 12
+PLANT_BATCH = 6
+KAITUN_PLANT_BATCH = 16
+DROP_SCAN_INTERVAL = 0.75
+DROP_COLLECT_RADIUS = 500
+lastMovementBypassAt = 0
+MOVEMENT_BYPASS_INTERVAL = 0.04
+dropPromptCache = {}
+lastDropScan = 0
 WATERING_CAN_LIST = { "Super Watering Can", "Legendary Watering Can", "Rare Watering Can", "Uncommon Watering Can", "Common Watering Can" }
 SHOVEL_BATCH = 10
 MAIL_MAX_PER_GIFT = 20
@@ -2610,6 +2616,19 @@ function getGardenReturnPos()
     return savedPlotCenter
 end
 
+function returnToGardenAfterSteal()
+    refreshOwnerPlot()
+    local pos = getGardenReturnPos()
+    if not pos then return end
+    local hrp = getRoot()
+    if hrp then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    end
+    lastStealReturn = os.clock()
+end
+
 function returnToGardenOnce()
     local now = os.clock()
     if now - lastStealReturn < STEAL_RETURN_COOLDOWN then return end
@@ -2635,9 +2654,10 @@ end
 
 function finishStealSession(sessionId, shouldReturn)
     if sessionId ~= stealSessionId then return end
-    if shouldReturn then returnToGardenOnce() end
+    if shouldReturn then returnToGardenAfterSteal() end
     movementBypass = false
     gardenActionLock = false
+    gardenActionLockSince = 0
     local hum = getHumanoid()
     if hum then hum.PlatformStand = false end
     stealBusy = false
@@ -3275,6 +3295,34 @@ function pickNextPlantSeed()
     return nil, nil
 end
 
+function equipSeedForPlant(seedName)
+    local tool = findSeedToolByName(seedName)
+    if not tool then return nil end
+    local hum = getHumanoid()
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if hum then
+        local equipped = hum:FindFirstChildOfClass("Tool")
+        if equipped and equipped ~= tool then
+            xpcall(function() hum:UnequipTools() end, noopErr)
+            task.wait(0.06)
+        end
+        if tool.Parent == bp then
+            xpcall(function() hum:EquipTool(tool) end, noopErr)
+        elseif tool.Parent ~= LocalPlayer.Character then
+            if bp then tool.Parent = bp end
+            task.wait(0.04)
+            tool = findSeedToolByName(seedName)
+            if tool and tool.Parent == bp then xpcall(function() hum:EquipTool(tool) end, noopErr) end
+        end
+        for _ = 1, 10 do
+            tool = findSeedToolByName(seedName)
+            if tool and tool.Parent == LocalPlayer.Character then return tool end
+            task.wait(0.04)
+        end
+    end
+    return findSeedToolByName(seedName) or tool
+end
+
 function equipTool(tool, fast)
     if not tool then return end
     local hum = getHumanoid()
@@ -3523,6 +3571,39 @@ function isPhysicalFruitRipe(fruit, plant)
     return prompt ~= nil and getStealPrompt(fruit) == nil
 end
 
+function findBestHarvestablePhysical()
+    refreshOwnerPlot()
+    local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+    if not pf then return nil end
+    local best
+    for _, plant in pf:GetChildren() do
+        local plantId = plant:GetAttribute("PlantId") or plant:GetAttribute("PlantID") or plant.Name
+        local plantData = trackedPlants[plantId] or {
+            SeedName = plant:GetAttribute("SeedName") or plant:GetAttribute("PlantName"),
+            PlantName = plant:GetAttribute("PlantName") or plant:GetAttribute("SeedName"),
+        }
+        local fruitsFolder = plant:FindFirstChild("Fruits")
+        if fruitsFolder then
+            for _, fruit in fruitsFolder:GetChildren() do
+                if not isPhysicalFruitRipe(fruit, plant) then continue end
+                if not shouldHarvestTarget(plantData, { SeedName = plantData.SeedName }) then continue end
+                local fruitId = fruit:GetAttribute("FruitId") or fruit:GetAttribute("FruitID") or fruit.Name
+                local val = calculateStealValue(fruit) or 0
+                if not best or val > best.value then
+                    best = { plantId = plantId, fruitId = fruitId, value = val }
+                end
+            end
+        end
+        if isPhysicalFruitRipe(plant, nil) and shouldHarvestTarget(plantData, nil) then
+            local val = 0
+            if not best or val > best.value then
+                best = { plantId = plantId, fruitId = "", value = val }
+            end
+        end
+    end
+    return best
+end
+
 function findBestHarvestableInGarden()
     local best
     for plantId, plantData in pairs(trackedPlants) do
@@ -3565,7 +3646,8 @@ function findBestHarvestableInGarden()
             end
         end
     end
-    return best
+    if best then return best end
+    return findBestHarvestablePhysical()
 end
 
 function cleanupFiredSetIfNeeded(now)
@@ -3589,14 +3671,10 @@ function tryHarvestTick()
         end
         local best = cachedBestHarvest
         if best then
-            local key = tostring(best.plantId) .. "|" .. tostring(best.fruitId ~= "" and best.fruitId or "_plant")
-            if not firedSet[key] then
-                safeNetCall(Net.Garden and Net.Garden.CollectFruit, best.plantId, best.fruitId or "")
-                firedSet[key] = now
-                cachedBestHarvest = nil
-                cleanupFiredSetIfNeeded(now)
-                return
-            end
+            safeNetCall(Net.Garden and Net.Garden.CollectFruit, best.plantId, best.fruitId or "")
+            cachedBestHarvest = nil
+            cleanupFiredSetIfNeeded(now)
+            return
         end
     end
 
@@ -3677,12 +3755,21 @@ end
 function tryAutoPlant()
     if not autoPlantOn() then return end
     if plantingBusy then return end
-    if not isInGardenActionRange() then return end
     if not OwnerPlot then refreshOwnerPlot() end
     if not OwnerPlot then return end
-    if not setHasAny(selectedPlantSeeds) then return end
 
     local kaitun = ftgsOn("ftgs_Kaitun_AutoPlantAll")
+    if kaitun then applyKaitunPlantRaritiesToSelection() end
+    if not setHasAny(selectedPlantSeeds) then return end
+
+    if not isInGardenActionRange() then
+        if savedPlotCenter then
+            tpInstant(savedPlotCenter)
+            task.wait(0.06)
+        end
+        if not isInGardenActionRange() then return end
+    end
+
     local batch = kaitun and KAITUN_PLANT_BATCH or PLANT_BATCH
     plantingBusy = true
     local planted = 0
@@ -3691,19 +3778,19 @@ function tryAutoPlant()
         if not autoPlantOn() then break end
         if os.clock() - lastPlant < COOLDOWN.Plant then break end
         local seedName, tool = kaitun and pickKaitunPlantSeed() or pickNextPlantSeed()
-        if not seedName or not tool then break end
+        if not seedName then break end
         local pos = getFreePlantSpot(planted == 0)
         if not pos then break end
+        tool = equipSeedForPlant(seedName)
+        if not tool then break end
         lastPlant = os.clock()
-        equipTool(tool, true)
-        tool = findSeedToolByName(seedName) or tool
         safeNetCall(Net.Plant and Net.Plant.PlantSeed, pos, seedName, tool, OwnerPlot)
-        if tool and type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
+        if type(tool.Activate) == "function" then xpcall(function() tool:Activate() end, noopErr) end
         consumeFreePlantSpot()
         planted += 1
     end
 
-    if planted > 0 and planted >= batch then
+    if planted > 0 then
         cachedOccupied = nil
         lastOccupiedScan = 0
     end
@@ -3818,8 +3905,10 @@ function equipShovelForAction()
     if not shovel then return nil, nil end
     local hum = getHumanoid()
     if hum and shovel.Parent ~= LocalPlayer.Character then
+        xpcall(function() hum:UnequipTools() end, noopErr)
+        task.wait(0.05)
         xpcall(function() hum:EquipTool(shovel) end, noopErr)
-        task.wait(0.3)
+        task.wait(0.25)
     end
     shovel, shovelName = findShovelTool()
     if not shovel then
@@ -3839,7 +3928,7 @@ function tryShovel()
     local pf = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
     if not pf then return end
     for _, pl in pf:GetChildren() do
-        local pid = pl:GetAttribute("PlantId")
+        local pid = pl:GetAttribute("PlantId") or pl:GetAttribute("PlantID") or pl.Name
         local crop = pl:GetAttribute("SeedName") or pl:GetAttribute("CorePartName") or pl:GetAttribute("PlantName")
         if pid and crop and seedInSet(selectedShovelSeeds, crop) then
             lastShovel = os.clock()
@@ -3849,17 +3938,18 @@ function tryShovel()
                 if not shovel then shovelBusy = false return end
                 local ok, pos = pcall(function() return pl:GetPivot().Position end)
                 if ok and pos then
-                    if not lastShovelPos or (pos - lastShovelPos).Magnitude > 10 then
-                        tpInstant(pos)
-                        lastShovelPos = pos
-                        task.wait(0.05)
-                    end
+                    briefTpForAction(pos)
+                    task.wait(0.08)
                 end
                 shovel, shovelName = findShovelTool() or findGearTool("Shovel", { "Advanced Shovel", "Common Shovel" })
                 if not shovel then shovelBusy = false return end
                 shovelName = shovelName or shovel:GetAttribute("Shovel") or shovel.Name
-                safeNetCall(Net.Shovel and Net.Shovel.UseShovel, pid, "", shovelName, shovel)
-                if type(shovel.Activate) == "function" then xpcall(function() shovel:Activate() end, noopErr) end
+                for _ = 1, 4 do
+                    safeNetCall(Net.Shovel and Net.Shovel.UseShovel, pid, "", shovelName, shovel)
+                    if type(shovel.Activate) == "function" then xpcall(function() shovel:Activate() end, noopErr) end
+                    task.wait(0.04)
+                end
+                shovelClickAttack(shovel)
                 task.wait(COOLDOWN.Shovel)
                 shovelBusy = false
             end)
@@ -4087,23 +4177,15 @@ function stealFruit(fruit, ownerUserId, sessionId)
     end
 
     local fruitCountBefore = getFruitCount()
-    movementBypass = true
-    gardenActionLock = true
     tpInstant(stealPos)
     local deadline = os.clock() + STEAL_HOLD_TIMEOUT
     local lastNet = 0
-    local lastTp = os.clock()
 
     while os.clock() < deadline do
         if not autoStealOn() or sessionId ~= stealSessionId or not isNightTime() then break end
         if isStealComplete(fruit, fruitCountBefore) then break end
         if not fruit.Parent then break end
         local now = os.clock()
-        if now - lastTp >= 0.35 then
-            local hrp = getRoot()
-            if hrp and flatDistXZ(hrp.Position, stealPos) > STEAL_TP_DRIFT then tpInstant(stealPos) end
-            lastTp = now
-        end
         if now - lastNet >= STEAL_NET_GAP then
             local prompt = getStealPrompt(fruit)
             if prompt then fireProximityPromptFast(prompt) end
@@ -4113,9 +4195,6 @@ function stealFruit(fruit, ownerUserId, sessionId)
         end
         task.wait(STEAL_TICK)
     end
-
-    movementBypass = false
-    gardenActionLock = false
 
     if not autoStealOn() or sessionId ~= stealSessionId then return false end
 
@@ -4135,7 +4214,9 @@ function tryAutoSteal()
     stealBusy = true
     local sessionId = stealSessionId
     task.spawn(function()
-        task.wait(0.03)
+        movementBypass = true
+        gardenActionLock = true
+        task.wait(0.02)
         if sessionId ~= stealSessionId or not autoStealOn() or not isNightTime() then
             finishStealSession(sessionId, false)
             return
@@ -4167,8 +4248,7 @@ function tryAutoSteal()
             end
         end
 
-        local dayBroke = not isNightTime()
-        finishStealSession(sessionId, stolenTotal > 0 or dayBroke)
+        finishStealSession(sessionId, stolenTotal > 0)
     end)
 end
 
@@ -4231,12 +4311,16 @@ function tryBuyPet()
     table.sort(candidates, function(a, b) return (a.price or 0) < (b.price or 0) end)
     local pick = candidates[1]
     local tameRemote = Net.Pets and Net.Pets.WildPetTame
-    if pick.pos then tpInstant(pick.pos) end
-    for _ = 1, 12 do
-        if tameRemote then safeNetCall(tameRemote, pick.ref) end
-    end
-    local prompt = pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt then fireProximityPromptFast(prompt) end
+    task.spawn(function()
+        if pick.pos then tpInstant(pick.pos) end
+        for _ = 1, 28 do
+            if tameRemote then safeNetCall(tameRemote, pick.ref) end
+        end
+        local prompt = pick.ref:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then
+            for _ = 1, 6 do fireProximityPromptFast(prompt) end
+        end
+    end)
 end
 
 function hasIntruderOnPlot()
@@ -5287,10 +5371,10 @@ function applyMovement()
 end
 
 function applyMovementBypass(dt)
-    if not genv.ftgs_BypassMovement then return end
+    if not genv.ftgs_BypassMovement or desiredWalkSpeed <= 16 then return end
     if gardenActionLock then
         if gardenActionLockSince <= 0 then gardenActionLockSince = os.clock() end
-        if not stealBusy and not isCatchingPet and not collectingMutation and not sprinklerBusy and not wateringBusy
+        if not stealBusy and not isCatchingPet and not collectingMutation and not sprinklerBusy and not wateringBusy and not plantingBusy
             and os.clock() - gardenActionLockSince > GARDEN_LOCK_MAX then
             gardenActionLock = false
             movementBypass = false
@@ -5299,7 +5383,10 @@ function applyMovementBypass(dt)
     else
         gardenActionLockSince = 0
     end
-    if genv.ftgs_FakeLag or movementBypass or gardenActionLock or isCatchingPet or stealBusy or collectingMutation then return end
+    if genv.ftgs_FakeLag or movementBypass or gardenActionLock or isCatchingPet or stealBusy or collectingMutation or plantingBusy then return end
+    local now = os.clock()
+    if now - lastMovementBypassAt < MOVEMENT_BYPASS_INTERVAL then return end
+    lastMovementBypassAt = now
     local hum = getHumanoid()
     local hrp = getRoot()
     if not hum or not hrp then return end
@@ -5314,23 +5401,13 @@ function applyMovementBypass(dt)
     local flat = Vector3.new(dir.X, 0, dir.Z)
     if flat.Magnitude <= 0.01 then return end
     flat = flat.Unit
-    local speed = desiredWalkSpeed
+    local speed = math.min(desiredWalkSpeed, 120)
     local step = speed * dt
     local targetPos = hrp.Position + flat * step
     local vel = Vector3.new(flat.X * speed, hrp.AssemblyLinearVelocity.Y, flat.Z * speed)
     hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.05, 0), targetPos + flat)
     hrp.AssemblyLinearVelocity = vel
     hrp.AssemblyAngularVelocity = Vector3.zero
-    pcall(function() hrp.Velocity = vel end)
-    if lastClientMovePos then
-        local snapBack = (hrp.Position - lastClientMovePos).Magnitude
-        if snapBack > 14 then
-            local push = lastClientMovePos + flat * step * 2.5
-            hrp.CFrame = CFrame.new(push + Vector3.new(0, 0.05, 0), push + flat)
-            hrp.AssemblyLinearVelocity = vel
-            pcall(function() hrp.Velocity = vel end)
-        end
-    end
     lastClientMovePos = hrp.Position
     lastKnownMoveCF = hrp.CFrame
 end
@@ -5649,7 +5726,7 @@ function tryCollectMutationSeedsOnce()
             if pos then stickToPosition(pos) end
             local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt then fireProximityPromptFast(prompt) end
-            task.wait(0.006)
+            task.wait(0.08)
         end
         if hum then hum.PlatformStand = false end
         movementBypass = false
@@ -5692,22 +5769,56 @@ function tryExpand()
     safeNetCall(Net.Actions and Net.Actions.ExpandGarden)
 end
 
+function scanDropPromptsInto(container, out, hrpPos)
+    if not container then return end
+    for _, item in container:GetDescendants() do
+        if not item:IsA("ProximityPrompt") then continue end
+        local action = (item.ActionText or ""):lower()
+        local obj = (item.ObjectText or ""):lower()
+        if not (action:find("pick") or action:find("collect") or action:find("grab") or obj:find("drop")) then continue end
+        local parent = item.Parent
+        if not parent then continue end
+        local part = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart", true)
+        if not part then continue end
+        if hrpPos and (part.Position - hrpPos).Magnitude > DROP_COLLECT_RADIUS then continue end
+        out[#out + 1] = { prompt = item, part = part, dist = hrpPos and (part.Position - hrpPos).Magnitude or 0 }
+    end
+end
+
+function rebuildDropPromptCache()
+    dropPromptCache = {}
+    local hrp = getRoot()
+    local hrpPos = hrp and hrp.Position
+    local roots = {}
+    local map = Services.Workspace:FindFirstChild("Map")
+    if map then
+        for _, name in { "ItemDrops", "Drops", "Collectibles", "SeedPackSpawns" } do
+            local folder = map:FindFirstChild(name)
+            if folder then roots[#roots + 1] = folder end
+        end
+    end
+    for _, name in { "Drops", "ItemDrops" } do
+        local folder = Services.Workspace:FindFirstChild(name)
+        if folder then roots[#roots + 1] = folder end
+    end
+    if OwnerPlot then roots[#roots + 1] = OwnerPlot end
+    for _, root in roots do scanDropPromptsInto(root, dropPromptCache, hrpPos) end
+    table.sort(dropPromptCache, function(a, b) return a.dist < b.dist end)
+    lastDropScan = os.clock()
+end
+
 function findNearestDropPrompt()
     local hrp = getRoot()
     if not hrp then return nil end
-    local best, bestDist
-    for _, item in Services.Workspace:GetDescendants() do
-        if not item:IsA("ProximityPrompt") then continue end
-        local action = (item.ActionText or ""):lower()
-        if not (action:find("pick") or action:find("collect")) then continue end
-        local parent = item.Parent
-        if not parent or (OwnerPlot and parent:IsDescendantOf(OwnerPlot)) then continue end
-        local part = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart", true)
-        if not part then continue end
-        local d = (part.Position - hrp.Position).Magnitude
-        if not bestDist or d < bestDist then best, bestDist = { prompt = item, part = part }, d end
+    if os.clock() - lastDropScan > DROP_SCAN_INTERVAL then rebuildDropPromptCache() end
+    if #dropPromptCache == 0 then return nil end
+    local entry = dropPromptCache[1]
+    if not entry or not entry.prompt or not entry.prompt.Parent then
+        rebuildDropPromptCache()
+        entry = dropPromptCache[1]
     end
-    return best
+    if not entry then return nil end
+    return { prompt = entry.prompt, part = entry.part }
 end
 
 function tryCollectDrops()
@@ -5717,12 +5828,24 @@ function tryCollectDrops()
     dropsBusy = true
     task.spawn(function()
         movementBypass = true
+        gardenActionLock = true
         tpInstant(nearest.part.Position)
-        fireProximityPrompt(nearest.prompt)
-        task.wait(0.03)
+        task.wait(0.04)
+        for _ = 1, 5 do
+            if not autoCollectDropsOn() then break end
+            fireProximityPromptFast(nearest.prompt)
+            task.wait(0.05)
+        end
         movementBypass = false
+        gardenActionLock = false
         dropsBusy = false
+        lastDropScan = 0
     end)
+end
+
+function tryAutoCollectTick()
+    if autoCollectMutationOn() and not collectingMutation then tryCollectMutationSeedsOnce() end
+    if autoCollectDropsOn() and not dropsBusy and not collectingMutation then tryCollectDrops() end
 end
 
 function hexColor(hex)
@@ -6343,7 +6466,7 @@ hubLoop(function()
     while true do
         if autoStealOn() and not stealBusy and isNightTime() then safeLoop(tryAutoSteal) end
         flushStealConfigIfDue()
-        task.wait(stealBusy and 0.15 or 0.65)
+        task.wait(stealBusy and 0.2 or 0.45)
     end
 end)
 
@@ -6358,21 +6481,14 @@ end)
 hubLoop(function()
     while true do
         if autoBuyPetOn() then safeLoop(tryBuyPet) end
-        task.wait(0.05)
+        task.wait(0.01)
     end
 end)
 
 hubLoop(function()
     while true do
-        if autoCollectMutationOn() and not collectingMutation then safeLoop(tryCollectMutationSeedsOnce) end
-        task.wait(collectingMutation and 0.04 or 0.1)
-    end
-end)
-
-hubLoop(function()
-    while true do
-        if autoCollectDropsOn() and not dropsBusy then safeLoop(tryCollectDrops) end
-        task.wait(0.12)
+        if autoCollectMutationOn() or autoCollectDropsOn() then safeLoop(tryAutoCollectTick) end
+        task.wait(collectingMutation and 0.08 or 0.15)
     end
 end)
 
@@ -6398,8 +6514,10 @@ hubLoop(function()
     while true do
         safeLoop(refreshOwnerPlot)
         safeLoop(initMapFolders)
-        safeNetCall(Net.Garden and Net.Garden.RequestGardens)
-        task.wait(3)
+        if autoStealOn() or autoHarvestOn() or genv.ftgs_AutoHarvestBest then
+            safeNetCall(Net.Garden and Net.Garden.RequestGardens)
+        end
+        task.wait(6)
     end
 end)
 
@@ -6455,8 +6573,8 @@ end)
 
 hubLoop(function()
     while true do
-        if genv.ftgs_AntiStealGuard and not gardenActionLock and not stealBusy then safeLoop(tryAntiStealGuard) end
-        task.wait(0.05)
+        if genv.ftgs_AntiStealGuard and isNightTime() and not gardenActionLock and not stealBusy then safeLoop(tryAntiStealGuard) end
+        task.wait(0.6)
     end
 end)
 
@@ -6489,12 +6607,11 @@ hubLoop(function()
     end
 end)
 
-Services.RunService.Heartbeat:Connect(function()
-    safeLoop(applyMovement)
-end)
-
-Services.RunService.RenderStepped:Connect(function(dt)
-    safeLoop(function() if hubKeyUnlocked then applyMovementBypass(dt) end end)
+Services.RunService.Heartbeat:Connect(function(dt)
+    safeLoop(function()
+        if hubKeyUnlocked and (desiredWalkSpeed ~= 16 or desiredJumpPower ~= 50) then applyMovement() end
+        if hubKeyUnlocked then applyMovementBypass(dt) end
+    end)
 end)
 
 task.spawn(function()
